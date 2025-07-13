@@ -1,0 +1,9 @@
+.venv/
+data/
+runs/
+checkpoints/
+*.pyc
+*.tfevents.*
+*.pth
+*.pth.*
+*.pt
