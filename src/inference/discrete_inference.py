@@ -3,6 +3,12 @@ from torch import Tensor
 from torch.distributions import Categorical
 from torch.nn import functional as F
 
+def dis_t(i: Tensor, n: Tensor, minimum: float=1e-6):
+  assert torch.all(i <= n), "i must be less than or equal to n"
+  assert torch.all(n > 0), "n must be at least 1"
+  assert torch.all(i > 0), "i must be at least 1"
+  return torch.clamp((i - 1) / n, min=minimum)
+
 def accuracy(i: Tensor, n: Tensor, beta_1: Tensor) -> Tensor:
     """
     Args:

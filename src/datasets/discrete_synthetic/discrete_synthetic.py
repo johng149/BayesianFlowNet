@@ -19,7 +19,6 @@ class DiscreteSyntheticDataset(Dataset):
             for c in str(i):
                 acc += " " + c
             acc += " ,"
-        print(acc)
         tokenized = self.tokenizer.encode(acc)
         return tokenized[:self.tokenized_length]
     
