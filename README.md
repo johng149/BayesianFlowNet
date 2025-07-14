@@ -1,0 +1,1 @@
+Run pytest with `python -m pytest`
