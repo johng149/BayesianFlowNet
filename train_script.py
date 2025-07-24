@@ -1,5 +1,6 @@
 import torch
 from src.datasets.discrete_synthetic.discrete_synthetic import DiscreteSyntheticDataset
+from src.datasets.discrete_helper import collate_fn
 from src.tokenizers.discrete_synthetic.discrete_synthetic_tokenizer import DiscreteSyntheticTokenizer
 from src.nn.models.discrete_model import DiscreteModel
 from src.training.training import train_discrete_model
@@ -11,14 +12,7 @@ accelerator = Accelerator()
 tokenizer = DiscreteSyntheticTokenizer()
 max_seq_len = 32
 train_ds = DiscreteSyntheticDataset(tokenizer, tokenized_length=max_seq_len)
-train_dl = torch.utils.data.DataLoader(train_ds, batch_size=32, shuffle=True)
-
-def make_infinite(dl):
-    while True:
-        for data in dl:
-            yield data
-
-train_dl = make_infinite(train_dl)
+train_dl = torch.utils.data.DataLoader(train_ds, batch_size=32, shuffle=True, collate_fn=collate_fn)
 
 model = DiscreteModel(max_seq_len, tokenizer.vocab_size(), hidden_dim=64, num_heads=8)
 opt = torch.optim.Adam(model.parameters(), lr=1e-3)
