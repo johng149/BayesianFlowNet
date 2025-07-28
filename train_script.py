@@ -7,6 +7,7 @@ from src.training.training import train_discrete_model
 from matplotlib import pyplot as plt
 from src.inference.discrete_inference import dis_t, bayesian_inference
 from accelerate import Accelerator
+from src.training.checkpoint import save_checkpoint, load_checkpoint
 
 accelerator = Accelerator()
 tokenizer = DiscreteSyntheticTokenizer()
@@ -21,7 +22,9 @@ model, opt, train_dl = accelerator.prepare(model, opt, train_dl)
 
 loss_tracker = []
 
-train_discrete_model(model, opt, train_dl, epochs=1_000, accelerator=accelerator, loss_tracker=loss_tracker)
+load_checkpoint(accelerator, "./checkpoint")
+train_discrete_model(model, opt, train_dl, epochs=100, accelerator=accelerator, loss_tracker=loss_tracker)
+save_checkpoint(accelerator, "./checkpoint")
 
 # plot loss to file
 plt.plot(loss_tracker)
