@@ -7,24 +7,51 @@ from src.training.training import train_discrete_model
 from matplotlib import pyplot as plt
 from src.inference.discrete_inference import dis_t, bayesian_inference
 from accelerate import Accelerator
-from src.training.checkpoint import save_checkpoint, load_checkpoint
+from src.training.checkpoint import CheckpointMetadata, CheckpointManager
+from safetensors.torch import load_file
 
 accelerator = Accelerator()
+print(f"Using device: {accelerator.device}")
+print(f"Num processes: {accelerator.num_processes}")
+print(f"Using fsdp: {hasattr(accelerator.state, 'fsdp_plugin') and accelerator.state.fsdp_plugin is not None}")
 tokenizer = DiscreteSyntheticTokenizer()
 max_seq_len = 32
 train_ds = DiscreteSyntheticDataset(tokenizer, tokenized_length=max_seq_len)
 train_dl = torch.utils.data.DataLoader(train_ds, batch_size=32, shuffle=True, collate_fn=collate_fn)
 
-model = DiscreteModel(max_seq_len, tokenizer.vocab_size(), hidden_dim=64, num_heads=8)
-opt = torch.optim.Adam(model.parameters(), lr=1e-3)
 
-model, opt, train_dl = accelerator.prepare(model, opt, train_dl)
+model_kwargs = {
+    "max_seq_len": max_seq_len,
+    "K": tokenizer.vocab_size(),
+    "hidden_dim": 64,
+    "num_heads": 8
+}
+model = DiscreteModel(**model_kwargs)
+
+optimizer_kwargs = {
+    "lr": 1e-3,
+}
+opt = torch.optim.Adam(model.parameters(), **optimizer_kwargs)
+
+metadata = CheckpointMetadata(
+  model_kwargs=model_kwargs,
+  optimizer_kwargs=optimizer_kwargs,
+  is_fsdp=hasattr(accelerator.state, 'fsdp_plugin') and accelerator.state.fsdp_plugin is not None,
+  num_accelerators=accelerator.num_processes
+)
+
+checkpoint_manager = CheckpointManager()
+checkpoint_manager.prepare(model, opt, accelerator, metadata)
+checkpoint_manager.load("./checkpoint/latest_experimental3", error_if_not_exists=False)
+
+model, opt = checkpoint_manager.model, checkpoint_manager.optimizer
+train_dl = accelerator.prepare(train_dl)
 
 loss_tracker = []
 
-load_checkpoint(accelerator, "./checkpoint")
-train_discrete_model(model, opt, train_dl, epochs=100, accelerator=accelerator, loss_tracker=loss_tracker)
-save_checkpoint(accelerator, "./checkpoint")
+# load_checkpoint(accelerator, "./checkpoint")
+train_discrete_model(model, opt, train_dl, epochs=10, accelerator=accelerator, loss_tracker=loss_tracker)
+checkpoint_manager.save("./checkpoint/latest_experimental3")
 
 # plot loss to file
 plt.plot(loss_tracker)
