@@ -2,6 +2,7 @@
 data/
 runs/
 checkpoints/
+checkpoint/
 *.pyc
 *.tfevents.*
 *.pth
