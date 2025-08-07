@@ -31,7 +31,7 @@ def y_distribution(beta: Tensor, K: int, kron_x: Tensor) -> Tensor:
     mean = beta * (K * kron_x - 1)
     variance = beta * K
     epsilon = torch.normal(0, 1, kron_x.shape, device=kron_x.device)
-    return mean + variance * epsilon # I know the name `variance` suggests it should be squared, but this works just fine
+    return mean + (variance ** 0.5) * epsilon
 
 def theta(y: Tensor):
     """

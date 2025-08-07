@@ -7,7 +7,7 @@ from datasets import load_dataset
 import random
 
 class ShakespeareDataset(Dataset):
-    def __init__(self, tokenizer: TokenizerBase, max_length: int = 100, beta_1: float = 4.0, min_t: float = 1e-6, train: bool = True):
+    def __init__(self, tokenizer: TokenizerBase, max_length: int = 100, beta_1: float = 1.0, min_t: float = 1e-6, train: bool = True):
         self.tokenizer = tokenizer
         self.max_length = max_length
         self.min_t = min_t
@@ -20,7 +20,9 @@ class ShakespeareDataset(Dataset):
         return len(self.data)
     
     def __getitem__(self, index):
-        start = random.randint(0, len(self.data) - self.max_length)
+        # start = random.randint(0, len(self.data) - self.max_length)
+        # for debugging convergence issues, we'll use a smaller sample for now
+        start = random.randint(0, 5)
         end = start + self.max_length
         seq = self.data[start:end]
         seq = F.one_hot(seq, num_classes=self.tokenizer.vocab_size())

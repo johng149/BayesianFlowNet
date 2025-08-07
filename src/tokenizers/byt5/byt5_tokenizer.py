@@ -3,10 +3,10 @@ from torch import Tensor
 from src.tokenizers.base import TokenizerBase
 from transformers import AutoTokenizer
 
-class GPT2Tokenizer(TokenizerBase):
+class ByT5Tokenizer(TokenizerBase):
     def __init__(self):
         super().__init__()
-        self.tokenizer = AutoTokenizer.from_pretrained("gpt2", use_fast=False)
+        self.tokenizer = AutoTokenizer.from_pretrained("google/byt5-small", use_fast=False)
 
     def vocab_size(self) -> int:
         return self.tokenizer.vocab_size

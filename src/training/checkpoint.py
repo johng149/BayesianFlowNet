@@ -4,6 +4,7 @@ import torch
 from safetensors.torch import load_file
 import json
 from accelerate.utils import merge_fsdp_weights
+import atexit
 
 
 class CheckpointMetadata:
@@ -52,6 +53,13 @@ class CheckpointManager:
         self.optimizer = optimizer
         self.accelerator = accelerator
         self.metadata = metadata
+
+        def cleanup_distributed():
+            if torch.distributed.is_initialized():
+                torch.distributed.destroy_process_group()
+        
+        if self.accelerator.num_processes > 1:
+            atexit.register(cleanup_distributed)
 
     def save(self, save_directory, current_epoch):
         if not self.ready():

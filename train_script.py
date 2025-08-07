@@ -1,5 +1,5 @@
 import torch
-from src.tokenizers.gpt2.gpt2_tokenizer import GPT2Tokenizer
+from src.tokenizers.byt5.byt5_tokenizer import ByT5Tokenizer as Tokenizer
 from src.datasets.shakespeare.shakespeare import ShakespeareDataset
 from src.datasets.discrete_helper import collate_fn
 from src.nn.models.discrete_model import DiscreteModel
@@ -12,7 +12,7 @@ from safetensors.torch import load_file
 from transformers import AutoTokenizer
 
 accelerator = Accelerator(log_with="trackio", project_dir="./runs/shakespeare")
-tokenizer = GPT2Tokenizer()
+tokenizer = Tokenizer()
 max_seq_len = 32
 train_ds = ShakespeareDataset(tokenizer=tokenizer, max_length=max_seq_len)
 train_dl = torch.utils.data.DataLoader(
@@ -20,6 +20,7 @@ train_dl = torch.utils.data.DataLoader(
     batch_size=64,
     shuffle=True,
     collate_fn=collate_fn,
+    num_workers=3
 )
 
 
@@ -35,7 +36,7 @@ model = DiscreteModel(**model_kwargs)
 grad_clip_norm = 1.0
 
 optimizer_kwargs = {
-    "lr": 1e-6,
+    "lr": 1e-5,
 }
 opt = torch.optim.Adam(model.parameters(), **optimizer_kwargs)
 
@@ -49,14 +50,14 @@ metadata = CheckpointMetadata(
 )
 
 accelerator.init_trackers(
-    "shakespeare",
+    "shakespeare_std_dev_beta1.0_ByT5Tokenizer",
     config=metadata.to_dict(),
     init_kwargs={
-        "trackio": {"name": "shakespeare_chonky_silu_xavier", "resume": "allow"}
+        "trackio": {"name": "shakespeare_chonky_silu_xavier_1e-5_beta1.0_ByT5Tokenizer", "resume": "allow"}
     },
 )
 
-checkpoint_dir = "./checkpoint/shakespeare_chonky_silu_xavier"
+checkpoint_dir = "./checkpoint/shakespeare_chonky_silu_xavier_1e-5_beta1.0_ByT5Tokenizer"
 checkpoint_manager = CheckpointManager()
 checkpoint_manager.prepare(model, opt, accelerator, metadata)
 checkpoint_manager.load(checkpoint_dir, error_if_not_exists=False)
@@ -64,7 +65,7 @@ checkpoint_manager.load(checkpoint_dir, error_if_not_exists=False)
 model, opt = checkpoint_manager.model, checkpoint_manager.optimizer
 train_dl = accelerator.prepare(train_dl)
 
-epochs = 1000
+epochs = 50
 
 train_discrete_model(
     model,
@@ -76,17 +77,8 @@ train_discrete_model(
     checkpoint_manager=checkpoint_manager,
     save_dir=checkpoint_dir,
     grad_clip_norm=grad_clip_norm,
-    save_every=128,
+    save_every=900,
 )
-# checkpoint_manager.save(checkpoint_dir, checkpoint_manager.current_epoch + epochs)
-
-# plot loss to file
-# plt.plot(loss_tracker)
-# plt.xlabel("Epoch")
-# plt.ylabel("Loss")
-# plt.title("Training Loss")
-# plt.savefig("training_loss.png")
-# plt.show()
 
 model_input = torch.normal(0, 1, (1, max_seq_len, tokenizer.vocab_size())).to(
     accelerator.device

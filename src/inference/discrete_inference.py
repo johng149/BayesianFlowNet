@@ -51,7 +51,7 @@ def y(sampled_one_hot: Tensor, accuracy: Tensor) -> Tensor:
     mean = accuracy * (K * sampled_one_hot - 1)
     variance = accuracy * K
     epsilon = torch.normal(0, 1, sampled_one_hot.shape, device=sampled_one_hot.device)
-    return mean + variance * epsilon  # I know the name `variance` suggests it should be squared, but this works just fine
+    return mean + (variance ** 0.5) * epsilon
 
 def bayesian_update(y: Tensor, model_input: Tensor, eps: float = 1e-8) -> Tensor:
     """
