@@ -20,5 +20,4 @@ pyfakefs==5.7.0
 bitsandbytes==0.44.1
 accelerate==1.9.0
 matplotlib
-trackio==0.2.2
 black
