@@ -154,6 +154,7 @@ class CheckpointManager:
         is_fsdp = checkpoint_metadata["is_fsdp"]
         accelerators = checkpoint_metadata["num_accelerators"]
         self.current_epoch = checkpoint_metadata["current_epoch"]
+        print(f"Attempting to load checkpoint from epoch {self.current_epoch}")
 
         if not is_fsdp and not self.metadata.is_fsdp:
             # Case 1
