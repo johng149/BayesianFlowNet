@@ -15,7 +15,7 @@ import os
 accelerator = Accelerator(log_with="tensorboard", project_dir="./runs")
 tokenizer = Tokenizer()
 max_seq_len = 32
-train_ds = ShakespeareDataset(tokenizer=tokenizer, max_length=max_seq_len, beta_1=0.55)
+train_ds = ShakespeareDataset(tokenizer=tokenizer, max_length=max_seq_len, beta_1=0.5)
 train_dl = torch.utils.data.DataLoader(
     train_ds,
     batch_size=64,
@@ -51,11 +51,11 @@ metadata = CheckpointMetadata(
 )
 
 accelerator.init_trackers(
-    "shakespeare_chonky_silu_xavier_1e-5_beta055_ASCIITokenizer_big_data",
+    "shakespeare_chonky_silu_xavier_1e-5_beta05_ASCIITokenizer_big_data",
 )
 
 checkpoint_dir = (
-    "./checkpoint/shakespeare_chonky_silu_xavier_1e-5_beta055_ASCIITokenizer_big_data"
+    "./checkpoint/shakespeare_chonky_silu_xavier_1e-5_beta05_ASCIITokenizer_big_data"
 )
 checkpoint_manager = CheckpointManager()
 checkpoint_manager.prepare(model, opt, accelerator, metadata)
@@ -64,7 +64,7 @@ checkpoint_manager.load(checkpoint_dir, error_if_not_exists=False)
 model, opt = checkpoint_manager.model, checkpoint_manager.optimizer
 train_dl = accelerator.prepare(train_dl)
 
-epochs = 300_000
+epochs = 550_000
 
 train_discrete_model(
     model,
@@ -76,7 +76,7 @@ train_discrete_model(
     checkpoint_manager=checkpoint_manager,
     save_dir=checkpoint_dir,
     grad_clip_norm=grad_clip_norm,
-    save_every=1400,
+    save_every=2400,
 )
 
 model_input = torch.normal(0, 1, (1, max_seq_len, tokenizer.vocab_size())).to(
@@ -92,7 +92,7 @@ for i in range(1, n + 1):
     cur_it = torch.tensor([i], device=accelerator.device)
     total_it = torch.tensor([n], device=accelerator.device)
     t = dis_t(cur_it, total_it).to(accelerator.device)
-    dis_beta_1 = torch.ones_like(t, device=accelerator.device) * 4
+    dis_beta_1 = torch.ones_like(t, device=accelerator.device) * 0.5
 
     current_model_input = model_input.clone()
 
