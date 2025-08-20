@@ -8,3 +8,4 @@ checkpoint/
 *.pth
 *.pth.*
 *.pt
+exp/plots/
