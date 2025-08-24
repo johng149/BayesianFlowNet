@@ -1,9 +1,10 @@
 import torch
 from torch.nn import functional as F
 from torch.utils.data import Dataset
-from src.tokenizers.base import TokenizerBase
-from src.datasets.discrete_helper import sample_t, beta_t
+
 from datasets import load_dataset
+from src.datasets.discrete_helper import beta_t, sample_t
+from src.tokenizers.base import TokenizerBase
 
 
 class ShakespeareDataset(Dataset):
@@ -23,7 +24,10 @@ class ShakespeareDataset(Dataset):
         data = load_dataset(
             "karpathy/tiny_shakespeare", split="train" if train else "test"
         )
-        self.data = self.tokenizer.encode(data["text"][0])
+        self.data = self.tokenizer.encode(
+            # we know that `data["text"][0]` is a string
+            data["text"][0]  # pyright: ignore[reportArgumentType,reportIndexIssue]
+        )
 
     def __len__(self):
         return len(self.data)

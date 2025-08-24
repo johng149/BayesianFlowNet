@@ -1,10 +1,14 @@
+import atexit
+import json
 import os
 import shutil
+
 import torch
-from safetensors.torch import load_file
-import json
+from accelerate import Accelerator
 from accelerate.utils import merge_fsdp_weights
-import atexit
+from safetensors.torch import load_file
+from torch import nn
+from torch.optim import Optimizer
 
 
 class CheckpointMetadata:
@@ -34,10 +38,10 @@ class CheckpointMetadata:
 
 class CheckpointManager:
     def __init__(self):
-        self.model = None
-        self.optimizer = None
-        self.accelerator = None
-        self.metadata = None
+        self.model: nn.Module | None = None
+        self.optimizer: Optimizer | None = None
+        self.accelerator: Accelerator | None = None
+        self.metadata: CheckpointMetadata | None = None
         self.current_epoch = 0
 
     def ready(self):
@@ -57,8 +61,11 @@ class CheckpointManager:
         def cleanup_distributed():
             if torch.distributed.is_initialized():
                 torch.distributed.destroy_process_group()
-        
-        if self.accelerator.num_processes > 1:
+
+        if (
+            self.accelerator.num_processes  # pyright: ignore[reportOptionalMemberAccess]
+            > 1
+        ):
             atexit.register(cleanup_distributed)
 
     def save(self, save_directory, current_epoch):
@@ -66,10 +73,14 @@ class CheckpointManager:
             raise RuntimeError(
                 "CheckpointManager is not ready. Please prepare it with model, optimizer, accelerator, and metadata."
             )
-        self.accelerator.wait_for_everyone()
-        self.accelerator.save_state(save_directory)
+        self.accelerator.wait_for_everyone()  # pyright: ignore[reportOptionalMemberAccess]
+        self.accelerator.save_state(  # pyright: ignore[reportOptionalMemberAccess]
+            save_directory
+        )
         with open(os.path.join(save_directory, "metadata.json"), "w") as f:
-            data = self.metadata.to_dict()
+            data = (
+                self.metadata.to_dict()  # pyright: ignore[reportOptionalMemberAccess]
+            )
             data["current_epoch"] = current_epoch
             json.dump(data, f)
 
@@ -79,7 +90,7 @@ class CheckpointManager:
                 f"Model shard directory {model_shard_dir} does not exist."
             )
         if os.path.exists(output_dir) and os.listdir(output_dir):
-            if not self.metadata.is_fsdp:
+            if not self.metadata.is_fsdp:  # pyright: ignore[reportOptionalMemberAccess]
                 raise FileExistsError(
                     f"Output directory {output_dir} already exists and is not empty. Please choose a different directory."
                 )
@@ -103,11 +114,13 @@ class CheckpointManager:
                     f"Checkpoint directory {load_directory} does not exist."
                 )
             else:
-                self.accelerator.print(
+                self.accelerator.print(  # pyright: ignore[reportOptionalMemberAccess]
                     f"Checkpoint directory {load_directory} does not exist. Skipping load."
                 )
-                self.model, self.optimizer = self.accelerator.prepare(
-                    self.model, self.optimizer
+                self.model, self.optimizer = (
+                    self.accelerator.prepare(  # pyright: ignore[reportOptionalMemberAccess]
+                        self.model, self.optimizer
+                    )
                 )
                 return
 
@@ -115,11 +128,13 @@ class CheckpointManager:
             if error_if_not_exists:
                 raise FileNotFoundError(f"Metadata file not found in {load_directory}.")
             else:
-                self.accelerator.print(
+                self.accelerator.print(  # pyright: ignore[reportOptionalMemberAccess]
                     f"Metadata file not found in {load_directory}. Skipping load."
                 )
-                self.model, self.optimizer = self.accelerator.prepare(
-                    self.model, self.optimizer
+                self.model, self.optimizer = (
+                    self.accelerator.prepare(  # pyright: ignore[reportOptionalMemberAccess]
+                        self.model, self.optimizer
+                    )
                 )
                 return
         """
@@ -156,13 +171,23 @@ class CheckpointManager:
         self.current_epoch = checkpoint_metadata["current_epoch"]
         print(f"Attempting to load checkpoint from epoch {self.current_epoch}")
 
-        if not is_fsdp and not self.metadata.is_fsdp:
+        if (
+            not is_fsdp
+            and not self.metadata.is_fsdp  # pyright: ignore[reportOptionalMemberAccess]
+        ):
             # Case 1
-            self.model, self.optimizer = self.accelerator.prepare(
-                self.model, self.optimizer
+            self.model, self.optimizer = (
+                self.accelerator.prepare(  # pyright: ignore[reportOptionalMemberAccess]
+                    self.model, self.optimizer
+                )
             )
-            self.accelerator.load_state(load_directory)
-        elif not is_fsdp and self.metadata.is_fsdp:
+            self.accelerator.load_state(  # pyright: ignore[reportOptionalMemberAccess]
+                load_directory
+            )
+        elif (
+            not is_fsdp
+            and self.metadata.is_fsdp  # pyright: ignore[reportOptionalMemberAccess]
+        ):
             # Case 2
             model_file_path = None
             for f in os.listdir(load_directory):
@@ -179,33 +204,54 @@ class CheckpointManager:
                 state_dict = load_file(model_file_path)
             else:
                 raise ValueError(f"Unsupported model file format: {model_file_path}")
-            self.model.load_state_dict(state_dict)
-            self.model, self.optimizer = self.accelerator.prepare(
-                self.model, self.optimizer
+            self.model.load_state_dict(  # pyright: ignore[reportOptionalMemberAccess]
+                state_dict
             )
-        elif is_fsdp and not self.metadata.is_fsdp:
+            self.model, self.optimizer = (
+                self.accelerator.prepare(  # pyright: ignore[reportOptionalMemberAccess]
+                    self.model, self.optimizer
+                )
+            )
+        elif (
+            is_fsdp
+            and not self.metadata.is_fsdp  # pyright: ignore[reportOptionalMemberAccess]
+        ):
             # Case 3
             self.merge_model_shards(
                 load_directory + "/pytorch_model_fsdp_0", load_directory + "_merged"
             )
-            self.model.load_state_dict(
+            self.model.load_state_dict(  # pyright: ignore[reportOptionalMemberAccess]
                 torch.load(
                     os.path.join(load_directory + "_merged", "pytorch_model.bin")
                 )
             )
-            self.model, self.optimizer = self.accelerator.prepare(
-                self.model, self.optimizer
-            )
-            # now delete the merged directory
-            if self.accelerator.is_main_process:
-                shutil.rmtree(load_directory + "_merged")
-        elif is_fsdp and self.metadata.is_fsdp:
-            # Case 4
-            if accelerators == self.metadata.num_accelerators:
-                self.model, self.optimizer = self.accelerator.prepare(
+            self.model, self.optimizer = (
+                self.accelerator.prepare(  # pyright: ignore[reportOptionalMemberAccess]
                     self.model, self.optimizer
                 )
-                self.accelerator.load_state(load_directory)
+            )
+            # now delete the merged directory
+            if (
+                self.accelerator.is_main_process  # pyright: ignore[reportOptionalMemberAccess]
+            ):
+                shutil.rmtree(load_directory + "_merged")
+        elif (
+            is_fsdp
+            and self.metadata.is_fsdp  # pyright: ignore[reportOptionalMemberAccess]
+        ):
+            # Case 4
+            if (
+                accelerators
+                == self.metadata.num_accelerators  # pyright: ignore[reportOptionalMemberAccess]
+            ):
+                self.model, self.optimizer = (
+                    self.accelerator.prepare(  # pyright: ignore[reportOptionalMemberAccess]
+                        self.model, self.optimizer
+                    )
+                )
+                self.accelerator.load_state(  # pyright: ignore[reportOptionalMemberAccess]
+                    load_directory
+                )
             else:
                 # merge model shards
                 # note this sometimes fails / hangs due to data races, so if it fails the first time,
@@ -213,20 +259,24 @@ class CheckpointManager:
                 self.merge_model_shards(
                     load_directory + "/pytorch_model_fsdp_0", load_directory + "_merged"
                 )
-                self.model.load_state_dict(
+                self.model.load_state_dict(  # pyright: ignore[reportOptionalMemberAccess]
                     torch.load(
                         os.path.join(load_directory + "_merged", "pytorch_model.bin")
                     )
                 )
-                self.model, self.optimizer = self.accelerator.prepare(
-                    self.model, self.optimizer
+                self.model, self.optimizer = (
+                    self.accelerator.prepare(  # pyright: ignore[reportOptionalMemberAccess]
+                        self.model, self.optimizer
+                    )
                 )
                 # now delete the merged directory
-                if self.accelerator.is_main_process:
+                if (
+                    self.accelerator.is_main_process  # pyright: ignore[reportOptionalMemberAccess]
+                ):
                     shutil.rmtree(load_directory + "_merged")
         else:
             # shouldn't be possible, but just in case
             raise RuntimeError(
-                f"Inconsistent checkpoint metadata. Checkpoint metadata FSDP is {is_fsdp}, current FSDP is {self.metadata.is_fsdp}. "
-                f"Checkpoint metadata num accelerators is {accelerators}, current num accelerators is {self.metadata.num_accelerators}."
+                f"Inconsistent checkpoint metadata. Checkpoint metadata FSDP is {is_fsdp}, current FSDP is {self.metadata.is_fsdp}. "  # pyright: ignore[reportOptionalMemberAccess]
+                f"Checkpoint metadata num accelerators is {accelerators}, current num accelerators is {self.metadata.num_accelerators}."  # pyright: ignore[reportOptionalMemberAccess]
             )
