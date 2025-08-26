@@ -1,7 +1,10 @@
 import torch
-from torch import nn
+from torch import Tensor, nn
 from torch.nn import functional as F
 from torch.nn.init import xavier_uniform_
+
+from src.datasets.discrete_helper import theta, y_distribution
+from src.nn.layers.learnable_schedule import LearnableBetaScheduleNI
 
 
 class DiscreteModel(nn.Module):
@@ -16,6 +19,7 @@ class DiscreteModel(nn.Module):
     ):
         super().__init__()
         assert hidden_dim % num_heads == 0, "hidden_dim must be divisble by num_heads"
+        self.learnable_beta = LearnableBetaScheduleNI()
         self.emb = nn.Parameter(torch.randn(K, hidden_dim))
         self.pos_emb = nn.Parameter(torch.randn(max_seq_len, hidden_dim))
         self.time_vec = nn.Parameter(torch.randn(1, hidden_dim))
@@ -46,6 +50,38 @@ class DiscreteModel(nn.Module):
                 if "weight" in name:
                     xavier_uniform_(param)
 
+    def beta_1(self, K: int, device: str) -> float:
+        return self.learnable_beta.beta_1(K, device)
+
+    def scaling(self, K: int, device: str) -> float:
+        return self.learnable_beta.scaling(K, device)
+
+    def beta(self, t: Tensor, K: int) -> Tensor:
+        return self.learnable_beta(t, K)
+
+    def beta_and_alpha(
+        self, t: Tensor, K: int, epsilon: float = 1e-8
+    ) -> tuple[Tensor, Tensor]:
+        return self.learnable_beta.get_alpha(t, K, epsilon)
+
+    def theta_input(self, x: Tensor, t: Tensor, beta: Tensor) -> Tensor:
+        """
+        Args:
+            x: Ground truth tensor of shape (batch_size, seq_len, K).
+            t: A tensor representing the time step of shape (batch_size,).
+            beta: Beta value at the given time step t of shape (batch_size,).
+        Returns:
+            Transformed version of x, which is the input to the model.
+            The shape of the output tensor is the same as x, i.e., (batch_size, seq_len, K).
+        """
+        assert x.ndim == 3, "x should be a 3D tensor of shape (batch_size, seq_len, K)"
+        assert t.ndim == 1, "t should be a 1D tensor of shape (batch_size,)"
+        assert beta.ndim == 1, "beta should be a 1D tensor of shape (batch_size,)"
+
+        y = y_distribution(beta, x.shape[-1], x)  # Shape: (batch_size, seq_len, K)
+        theta_tensor = theta(y)  # Shape: (batch_size, seq_len, K)
+        return theta_tensor
+
     def token_emb(self, x):
         return x @ self.emb
 
@@ -61,9 +97,25 @@ class DiscreteModel(nn.Module):
         return (t.unsqueeze(-1) @ self.time_vec).unsqueeze(-2) + x
 
     def forward(self, x, t):
+        """
+        At this point in time, `x` is still the ground truth tensor. The model will
+        create the appropriate inputs as a function of this ground truth and the current
+        time step `t` in the denoising process
+
+        Args:
+            x: Ground truth tensor of shape (batch_size, seq_len, K).
+            t: A tensor representing the time step of shape (batch_size,).
+        Returns:
+            The output logits of the model of shape (batch_size, seq_len, K).
+        """
+        batch_folds, seq_len, K = x.shape
+        beta, alpha = self.beta_and_alpha(
+            t, K
+        )  # Shape: (batch_size * folds,) for each tensor
+        x = self.theta_input(x, t, beta)  # Shape: (batch_size * folds, seq_len, K)
         x = self.token_emb(x)
         x = self.positional_emb(x)
         x = self.time_emb(x, t)
         for i, l in enumerate(self.layers):
             x = l.forward(x)
-        return x @ self.classifier
+        return x @ self.classifier, alpha

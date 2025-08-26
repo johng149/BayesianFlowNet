@@ -8,12 +8,13 @@ from tqdm.auto import tqdm
 
 from src.datasets.discrete_helper import collate_fn
 from src.inference.discrete_inference import bayesian_inference, dis_t
+from src.nn.layers.learnable_schedule import LearnableBetaScheduleNI
 from src.nn.models.discrete_model import DiscreteModel
 from src.tokenizers.ascii.ascii_tokenizer import ASCIITokenizer as Tokenizer
 from src.training.checkpoint import CheckpointManager, CheckpointMetadata
 from src.training.training import train_discrete_model
 
-accelerator = Accelerator(log_with="trackio", project_dir="./runs/shakespeare")
+accelerator = Accelerator(project_dir="./runs/shakespeare")
 tokenizer = Tokenizer()
 max_seq_len = 32
 
@@ -41,9 +42,7 @@ metadata = CheckpointMetadata(
     num_accelerators=accelerator.num_processes,
 )
 
-checkpoint_dir = (
-    "./checkpoint/shakespeare_chonky_silu_xavier_1e-5_beta05_ASCIITokenizer_big_data"
-)
+checkpoint_dir = "./checkpoint/shakespeare_chonky_silu_xavier_1e-5_learned_beta_ASCIITokenizer_big_data_debugging"
 checkpoint_manager = CheckpointManager()
 print("Preparing model...")
 checkpoint_manager.prepare(model, opt, accelerator, metadata)
@@ -53,15 +52,17 @@ print("Finished loading checkpoint")
 
 model, opt = checkpoint_manager.model, checkpoint_manager.optimizer
 
+assert model is not None
+
+schedule = model.learnable_beta
+
+assert isinstance(schedule, LearnableBetaScheduleNI)
+
 quit_loop = False
 while not quit_loop:
     torch.manual_seed(0)
-    model_input = (
-        torch.normal(0, 1, (1, max_seq_len, tokenizer.vocab_size())).to(
-            accelerator.device
-        )
-        # + torch.randn(1, max_seq_len, tokenizer.vocab_size()).to(accelerator.device)
-        # * 0.1
+    model_input = torch.normal(0, 1, (1, max_seq_len, tokenizer.vocab_size())).to(
+        accelerator.device
     )
     model_input = torch.softmax(model_input, dim=-1) * 2 - 1
 
@@ -77,15 +78,17 @@ while not quit_loop:
         cur_it = torch.tensor([i], device=accelerator.device)
         total_it = torch.tensor([n], device=accelerator.device)
         t = dis_t(cur_it, total_it).to(accelerator.device)
-        dis_beta_1 = torch.ones_like(t, device=accelerator.device) * 0.5
 
         current_model_input = model_input.clone()
 
-        model_output = model.forward(  # pyright: ignore[reportOptionalMemberAccess]
-            model_input, t
-        )
+        model_output, _ = model.forward(model_input, t)
         model_input = bayesian_inference(
-            model_input, model_output, cur_it, total_it, dis_beta_1
+            model_input,
+            model_output,
+            cur_it,
+            total_it,
+            schedule,
+            tokenizer.vocab_size(),
         )
 
     tqdm.write("Final model result:")

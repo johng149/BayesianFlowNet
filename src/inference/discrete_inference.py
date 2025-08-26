@@ -3,26 +3,35 @@ from torch import Tensor
 from torch.distributions import Categorical
 from torch.nn import functional as F
 
-def dis_t(i: Tensor, n: Tensor, minimum: float=1e-6):
-  assert torch.all(i <= n), "i must be less than or equal to n"
-  assert torch.all(n > 0), "n must be at least 1"
-  assert torch.all(i > 0), "i must be at least 1"
-  return torch.clamp((i - 1) / n, min=minimum)
+from src.nn.layers.learnable_schedule import LearnableBetaScheduleNI
 
-def accuracy(i: Tensor, n: Tensor, beta_1: Tensor) -> Tensor:
+
+def dis_t(i: Tensor, n: Tensor, minimum: float = 1e-6):
+    assert torch.all(i <= n), "i must be less than or equal to n"
+    assert torch.all(n > 0), "n must be at least 1"
+    assert torch.all(i > 0), "i must be at least 1"
+    return torch.clamp((i - 1) / n, min=minimum)
+
+
+def accuracy(i: Tensor, n: Tensor, K: int, schedule: LearnableBetaScheduleNI) -> Tensor:
     """
     Args:
         i: Current iteration number of shape (batch_size,).
         n: Total number of iterations of shape (batch_size,).
-        beta_1: Maximum possible accuracy (reached when t=1) of shape (batch_size,).
+        K: Vocabulary size.
+        schedule: Parameterized module for beta schedule
     Returns:
         Accuracy at the current iteration i.
     """
     assert torch.all(n > 0), "Must have at least one inference step in total"
     assert torch.all(i > 0), "Must be on at least first inference step"
-    assert torch.all(i <= n), "Current iteration must be less than or equal to total iterations"
-    
-    return beta_1 * (2 * i - 1) / (n ** 2)
+    assert torch.all(
+        i <= n
+    ), "Current iteration must be less than or equal to total iterations"
+
+    t = i / n
+    return schedule.forward(t, K)
+
 
 def sample_model_output(model_output_logits: Tensor) -> Tensor:
     """
@@ -36,10 +45,11 @@ def sample_model_output(model_output_logits: Tensor) -> Tensor:
     samples = dist.sample()
     return F.one_hot(samples, K)
 
+
 def y(sampled_one_hot: Tensor, accuracy: Tensor) -> Tensor:
     """
     Args:
-        sampled_one_hot: Sampled output described by model logits that has been one-hot encoded, 
+        sampled_one_hot: Sampled output described by model logits that has been one-hot encoded,
                         of shape (batch_size, seq_len, K).
         accuracy: Accuracy at the current iteration of shape (batch_size,).
     Returns:
@@ -51,7 +61,8 @@ def y(sampled_one_hot: Tensor, accuracy: Tensor) -> Tensor:
     mean = accuracy * (K * sampled_one_hot - 1)
     variance = accuracy * K
     epsilon = torch.normal(0, 1, sampled_one_hot.shape, device=sampled_one_hot.device)
-    return mean + (variance ** 0.5) * epsilon
+    return mean + (variance**0.5) * epsilon
+
 
 def bayesian_update(y: Tensor, model_input: Tensor, eps: float = 1e-8) -> Tensor:
     """
@@ -61,24 +72,33 @@ def bayesian_update(y: Tensor, model_input: Tensor, eps: float = 1e-8) -> Tensor
     Returns:
         Resulting tensor after applying Bayesian update to the model input based on the noisy output y.
     """
-    log_model_input = torch.log(model_input + eps) # add eps to avoid log(0)
+    log_model_input = torch.log(model_input + eps)  # add eps to avoid log(0)
     z = y + log_model_input
     log_new_probs = F.log_softmax(z, dim=-1)
     res = torch.exp(log_new_probs)
     return res
 
-def bayesian_inference(model_input: Tensor, model_output_logits: Tensor, i: Tensor, n: Tensor, beta_1: Tensor) -> Tensor:
+
+def bayesian_inference(
+    model_input: Tensor,
+    model_output_logits: Tensor,
+    i: Tensor,
+    n: Tensor,
+    schedule: LearnableBetaScheduleNI,
+    K: int,
+) -> Tensor:
     """
     Args:
         model_input: Input to the model of shape (batch_size, seq_len, K).
         model_output_logits: Model output logits of shape (batch_size, seq_len, K).
         i: Current iteration number of shape (batch_size,).
         n: Total number of iterations of shape (batch_size,).
-        beta_1: Maximum possible accuracy (reached when t=1) of shape (batch_size,).
+        schedule: Parameterized module for beta schedule
+        K: Vocabulary size.
     Returns:
         Resulting tensor after performing Bayesian inference.
     """
-    acc = accuracy(i, n, beta_1)
+    acc = accuracy(i, n, K, schedule)
     sampled = sample_model_output(model_output_logits)
     noisy_y = y(sampled, acc)
 

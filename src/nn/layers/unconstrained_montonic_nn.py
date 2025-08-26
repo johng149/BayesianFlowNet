@@ -3,6 +3,7 @@ import math
 import numpy as np
 import torch
 from torch import Tensor, nn
+from torch.nn import functional as F
 
 # much of the following code is lifted straight from
 # https://arxiv.org/abs/1908.05164 (Unconstrained Monotonic NN)
@@ -214,7 +215,7 @@ class IntegrandNN_PE(nn.Module):
         combined_input = torch.cat((t_encoded, h), 1)
 
         # 3. Pass through the network, take exp since want only positive outputs
-        return torch.exp(self.net(combined_input))
+        return F.elu(self.net(combined_input)) + 1.001
 
 
 class MonotonicNN(nn.Module):
@@ -259,5 +260,5 @@ class MonotonicNN(nn.Module):
     def scaling(self, h):
         # This method returns the scaling factor for the input `h`, maybe useful for debugging
         out = self.net(h)
-        scaling = torch.exp(out[:, [0]])
+        scaling = F.elu(out[:, [0]]) + 1.001
         return scaling

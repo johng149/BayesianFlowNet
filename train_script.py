@@ -8,6 +8,7 @@ from safetensors.torch import load_file
 from src.datasets.discrete_helper import collate_fn
 from src.datasets.shakespeare.shakespeare import ShakespeareDataset
 from src.inference.discrete_inference import bayesian_inference, dis_t
+from src.nn.layers.learnable_schedule import LearnableBetaScheduleNI
 from src.nn.models.discrete_model import DiscreteModel
 from src.tokenizers.ascii.ascii_tokenizer import ASCIITokenizer as Tokenizer
 from src.training.checkpoint import CheckpointManager, CheckpointMetadata
@@ -16,12 +17,15 @@ from src.training.training import train_discrete_model
 accelerator = Accelerator(log_with="tensorboard", project_dir="./runs")
 tokenizer = Tokenizer()
 max_seq_len = 32
-train_ds = ShakespeareDataset(tokenizer=tokenizer, max_length=max_seq_len, beta_1=0.5)
+batch_size = 64
+folds = 8
+effective_batch_size = batch_size // folds
+train_ds = ShakespeareDataset(tokenizer=tokenizer, max_length=max_seq_len, folds=folds)
 train_dl = torch.utils.data.DataLoader(
     train_ds,
-    batch_size=64,
+    batch_size=effective_batch_size,
     shuffle=True,
-    collate_fn=collate_fn,
+    collate_fn=lambda x: collate_fn(x, tokenizer.vocab_size()),
     num_workers=3 if os.name != "nt" else 0,
 )
 
@@ -35,10 +39,10 @@ model_kwargs = {
 }
 model = DiscreteModel(**model_kwargs)
 
-grad_clip_norm = 1.0
+grad_clip_norm = None
 
 optimizer_kwargs = {
-    "lr": 1e-5,
+    "lr": 1e-4,
 }
 opt = torch.optim.Adam(
     model.parameters(), **optimizer_kwargs  # pyright: ignore[reportArgumentType]
@@ -54,12 +58,10 @@ metadata = CheckpointMetadata(
 )
 
 accelerator.init_trackers(
-    "shakespeare_chonky_silu_xavier_1e-5_beta05_ASCIITokenizer_big_data",
+    "shakespeare_chonky_silu_xavier_1e-5_learned_beta_ASCIITokenizer_big_data_debugging",
 )
 
-checkpoint_dir = (
-    "./checkpoint/shakespeare_chonky_silu_xavier_1e-5_beta05_ASCIITokenizer_big_data"
-)
+checkpoint_dir = "./checkpoint/shakespeare_chonky_silu_xavier_1e-5_learned_beta_ASCIITokenizer_big_data_debugging"
 checkpoint_manager = CheckpointManager()
 checkpoint_manager.prepare(model, opt, accelerator, metadata)
 checkpoint_manager.load(checkpoint_dir, error_if_not_exists=False)
@@ -67,7 +69,9 @@ checkpoint_manager.load(checkpoint_dir, error_if_not_exists=False)
 model, opt = checkpoint_manager.model, checkpoint_manager.optimizer
 train_dl = accelerator.prepare(train_dl)
 
-epochs = 550_000
+assert model is not None
+
+epochs = 2_113_000
 
 train_discrete_model(
     model,
@@ -79,8 +83,12 @@ train_discrete_model(
     checkpoint_manager=checkpoint_manager,
     save_dir=checkpoint_dir,
     grad_clip_norm=grad_clip_norm,
-    save_every=2400,
+    save_every=14_400,
+    folds=folds,
 )
+
+schedule = model.learnable_beta
+assert isinstance(schedule, LearnableBetaScheduleNI)
 
 model_input = torch.normal(0, 1, (1, max_seq_len, tokenizer.vocab_size())).to(
     accelerator.device
@@ -95,15 +103,17 @@ for i in range(1, n + 1):
     cur_it = torch.tensor([i], device=accelerator.device)
     total_it = torch.tensor([n], device=accelerator.device)
     t = dis_t(cur_it, total_it).to(accelerator.device)
-    dis_beta_1 = torch.ones_like(t, device=accelerator.device) * 0.5
 
     current_model_input = model_input.clone()
 
-    model_output = model.forward(  # pyright: ignore[reportOptionalMemberAccess]
-        model_input, t
-    )
+    model_output_logits, _ = model.forward(model_input, t)
     model_input = bayesian_inference(
-        model_input, model_output, cur_it, total_it, dis_beta_1
+        model_input,
+        model_output_logits,
+        cur_it,
+        total_it,
+        schedule,
+        tokenizer.vocab_size(),
     )
 
 print("Final model result:")
