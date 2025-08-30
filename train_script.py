@@ -42,14 +42,16 @@ model = DiscreteModel(**model_kwargs)
 grad_clip_norm = None
 
 optimizer_kwargs = {
-    "lr": 1e-4,
+    "body_optim_kwargs": {"lr": 1e-4},
+    "schedule_optim_kwargs": {"lr": 8e-5},
 }
 body_opt = torch.optim.Adam(
-    model.body.parameters(), **optimizer_kwargs  # pyright: ignore[reportArgumentType]
+    model.body.parameters(),
+    **optimizer_kwargs["body_optim_kwargs"],  # pyright: ignore[reportArgumentType]
 )
 schedule_opt = torch.optim.Adam(
     model.learnable_beta.parameters(),
-    **optimizer_kwargs,  # pyright: ignore[reportArgumentType]
+    **optimizer_kwargs["schedule_optim_kwargs"],  # pyright: ignore[reportArgumentType]
 )
 
 metadata = CheckpointMetadata(
@@ -62,10 +64,10 @@ metadata = CheckpointMetadata(
 )
 
 accelerator.init_trackers(
-    "shakespeare_chonky_silu_xavier_1e-5_learned_beta_ASCIITokenizer_big_data_elu_alphavar",
+    "shakespeare_chonky_silu_xavier_1e-5_learned_beta_ASCIITokenizer_big_data_softplus2_big",
 )
 
-checkpoint_dir = "./checkpoint/shakespeare_chonky_silu_xavier_1e-5_learned_beta_ASCIITokenizer_big_data_elu_alphavar"
+checkpoint_dir = "./checkpoint/shakespeare_chonky_silu_xavier_1e-5_learned_beta_ASCIITokenizer_big_data_softplus2_big"
 checkpoint_manager = CheckpointManager()
 checkpoint_manager.prepare(model, body_opt, schedule_opt, accelerator, metadata)
 checkpoint_manager.load(checkpoint_dir, error_if_not_exists=False)
@@ -96,6 +98,9 @@ train_discrete_model(
     grad_clip_norm=grad_clip_norm,
     save_every=14_400,
     folds=folds,
+    variance_loss_strength=0.8,
+    divergence_loss_strength=0.8,
+    alpha_linearity_loss_strength=0.4,
 )
 
 schedule = model.learnable_beta

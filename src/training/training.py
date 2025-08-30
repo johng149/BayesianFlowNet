@@ -28,8 +28,9 @@ def train_discrete_model(
     folds: int,
     grad_clip_norm=None,
     save_every: int = 100,
-    variance_loss_strength: float = 0.1,
-    divergence_loss_strength: float = 0.4,
+    variance_loss_strength: float = 1.0,
+    divergence_loss_strength: float = 0.5,
+    alpha_linearity_loss_strength: float = 0.2,
 ):
     """
     Args:
@@ -49,7 +50,8 @@ def train_discrete_model(
         grad_clip_norm: Gradient clipping norm
         save_every: Save checkpoint every X epochs
         variance_loss_strength: Strength of the variance loss
-        divergence_loss_strength: Strength of the divergence los
+        divergence_loss_strength: Strength of the divergence loss
+        alpha_linearity_loss_strength: Strength of the alpha linearity loss
     """
     epoch = starting_epoch
     # debug_data_past_epoch = {}
@@ -76,7 +78,7 @@ def train_discrete_model(
             )
             l_infty_loss = loss(formatted_loss)
             var_loss = variance_loss(formatted_loss) * variance_loss_strength
-            alpha_var_loss = alpha_variance_loss(alpha) * divergence_loss_strength
+            alpha_var_loss = alpha_variance_loss(alpha) * alpha_linearity_loss_strength
             div_loss = (
                 divergence_loss(x, model.learnable_beta) * divergence_loss_strength
             )

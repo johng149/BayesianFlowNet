@@ -217,7 +217,7 @@ class IntegrandNN_PE(nn.Module):
         # 3. Pass through the network, take exp since want only positive outputs
         net_out = self.net(combined_input)
 
-        return F.elu(net_out) + 1.001
+        return F.softplus(net_out)
 
 
 class MonotonicNN(nn.Module):
