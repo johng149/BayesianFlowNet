@@ -3,13 +3,22 @@ from sqlite3 import OperationalError
 import torch
 from tqdm.auto import tqdm
 
+from src.nn.models.discrete_model import DiscreteModel
 from src.training.checkpoint import CheckpointManager
-from src.training.discrete_loss import divergence_loss, format_loss, loss, variance_loss
+from src.training.discrete_loss import (
+    alpha_variance_loss,
+    divergence_loss,
+    format_loss,
+    loss,
+    variance_loss,
+)
+from src.training.gradient_surgery import gradient_surgery
 
 
 def train_discrete_model(
-    model,
-    optimizer,
+    model: DiscreteModel,
+    body_optimizer,
+    schedule_optimizer,
     train_dl,
     starting_epoch,
     epochs,
@@ -26,7 +35,8 @@ def train_discrete_model(
     Args:
         model: Model to train, it should output two Tensors in its forward function and an attribute called learnable_beta
             which points to a `LearnableBetaScheduleNI` instance, as well as a function beta_1 and scaling
-        optimizer: Optimizer to use for training
+        body_optimizer: Optimizer to use for model save for the learned beta schedule weights
+        schedule_optimizer: Optimizer to use for the schedule of the model
         train_dl: Training data loader
         starting_epoch: Epoch to start training from
         epochs: Number of epochs to train for
@@ -39,7 +49,7 @@ def train_discrete_model(
         grad_clip_norm: Gradient clipping norm
         save_every: Save checkpoint every X epochs
         variance_loss_strength: Strength of the variance loss
-        divergence_loss_strength: Strength of the divergence loss
+        divergence_loss_strength: Strength of the divergence los
     """
     epoch = starting_epoch
     # debug_data_past_epoch = {}
@@ -65,13 +75,12 @@ def train_discrete_model(
                 alpha, x, model_output_logits=output, folds=folds
             )
             l_infty_loss = loss(formatted_loss)
-            var_loss = variance_loss(formatted_loss)
-            div_loss = divergence_loss(x, model.learnable_beta)
-            l = (
-                l_infty_loss
-                + var_loss * variance_loss_strength
-                + div_loss * divergence_loss_strength
+            var_loss = variance_loss(formatted_loss) * variance_loss_strength
+            alpha_var_loss = alpha_variance_loss(alpha) * divergence_loss_strength
+            div_loss = (
+                divergence_loss(x, model.learnable_beta) * divergence_loss_strength
             )
+            l = l_infty_loss + var_loss + div_loss + alpha_var_loss
             # debug_data_current_epoch = {
             #     "x": x,
             #     "t": t,
@@ -86,22 +95,29 @@ def train_discrete_model(
             # }
 
             if (
-                l.isnan().any()
-                or l_infty_loss.isnan().any()
+                l_infty_loss.isnan().any()
                 or var_loss.isnan().any()
                 or div_loss.isnan().any()
             ):
                 raise RuntimeError("NaN detected in loss components")
 
-            optimizer.zero_grad()
-            accelerator.backward(l)
+            # optimizer.zero_grad()
+            # accelerator.backward(l)
+            gradient_surgery(
+                accelerator,
+                body_optim=body_optimizer,
+                schedule_optim=schedule_optimizer,
+                loss=l_infty_loss,
+                var_loss=var_loss,
+                div_loss=div_loss,
+                alpha_var_loss=alpha_var_loss,
+                body=model.body,
+                schedule=model.learnable_beta,
+                grad_clip_norm=grad_clip_norm,
+            )
 
             # if we get here, then loss was fine and no NaN detected in gradients either
             # debug_data_past_epoch = debug_data_current_epoch
-
-            if accelerator.sync_gradients and grad_clip_norm is not None:
-                accelerator.clip_grad_norm_(model.parameters(), grad_clip_norm)
-            optimizer.step()
 
             accelerator.log(
                 {
@@ -109,6 +125,7 @@ def train_discrete_model(
                     "l_infty_loss": l_infty_loss.item(),
                     "var_loss": var_loss.item(),
                     "div_loss": div_loss.item(),
+                    "alpha_var_loss": alpha_var_loss.item(),
                     "beta_1": model.beta_1(x.shape[-1], device=accelerator.device),
                 },
                 step=epoch,

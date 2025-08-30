@@ -215,7 +215,9 @@ class IntegrandNN_PE(nn.Module):
         combined_input = torch.cat((t_encoded, h), 1)
 
         # 3. Pass through the network, take exp since want only positive outputs
-        return F.elu(self.net(combined_input)) + 1.001
+        net_out = self.net(combined_input)
+
+        return F.elu(net_out) + 1.001
 
 
 class MonotonicNN(nn.Module):

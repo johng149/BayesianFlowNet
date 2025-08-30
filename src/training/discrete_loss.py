@@ -108,3 +108,8 @@ def divergence_loss(x: Tensor, schedule: LearnableBetaScheduleNI) -> Tensor:
     div_loss = F.kl_div(beta_1_probs, x, reduction="batchmean", log_target=False)
 
     return div_loss
+
+
+def alpha_variance_loss(alpha: Tensor) -> Tensor:
+    alpha_std = torch.std(alpha)
+    return -torch.log(alpha_std) / (1 + 4.9 * alpha_std)

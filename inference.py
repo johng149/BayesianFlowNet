@@ -30,8 +30,12 @@ model = DiscreteModel(**model_kwargs)
 optimizer_kwargs = {
     "lr": 3e-5,
 }
-opt = torch.optim.Adam(
-    model.parameters(), **optimizer_kwargs  # pyright: ignore[reportArgumentType]
+body_opt = torch.optim.Adam(
+    model.body.parameters(), **optimizer_kwargs  # pyright: ignore[reportArgumentType]
+)
+schedule_opt = torch.optim.Adam(
+    model.learnable_beta.parameters(),
+    **optimizer_kwargs,  # pyright: ignore[reportArgumentType]
 )
 
 metadata = CheckpointMetadata(
@@ -45,16 +49,17 @@ metadata = CheckpointMetadata(
 checkpoint_dir = "./checkpoint/shakespeare_chonky_silu_xavier_1e-5_learned_beta_ASCIITokenizer_big_data_debugging"
 checkpoint_manager = CheckpointManager()
 print("Preparing model...")
-checkpoint_manager.prepare(model, opt, accelerator, metadata)
+checkpoint_manager.prepare(model, body_opt, schedule_opt, accelerator, metadata)
 print("Starting checkpoint loading process...")
 checkpoint_manager.load(checkpoint_dir, error_if_not_exists=False)
 print("Finished loading checkpoint")
 
-model, opt = checkpoint_manager.model, checkpoint_manager.optimizer
+model, opt = checkpoint_manager.model, checkpoint_manager.body_optimizer
 
 assert model is not None
+assert isinstance(model, DiscreteModel)
 
-schedule = model.learnable_beta
+schedule: LearnableBetaScheduleNI = model.learnable_beta
 
 assert isinstance(schedule, LearnableBetaScheduleNI)
 

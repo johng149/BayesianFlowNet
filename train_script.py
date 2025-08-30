@@ -17,7 +17,7 @@ from src.training.training import train_discrete_model
 accelerator = Accelerator(log_with="tensorboard", project_dir="./runs")
 tokenizer = Tokenizer()
 max_seq_len = 32
-batch_size = 64
+batch_size = 64 * 2
 folds = 8
 effective_batch_size = batch_size // folds
 train_ds = ShakespeareDataset(tokenizer=tokenizer, max_length=max_seq_len, folds=folds)
@@ -44,8 +44,12 @@ grad_clip_norm = None
 optimizer_kwargs = {
     "lr": 1e-4,
 }
-opt = torch.optim.Adam(
-    model.parameters(), **optimizer_kwargs  # pyright: ignore[reportArgumentType]
+body_opt = torch.optim.Adam(
+    model.body.parameters(), **optimizer_kwargs  # pyright: ignore[reportArgumentType]
+)
+schedule_opt = torch.optim.Adam(
+    model.learnable_beta.parameters(),
+    **optimizer_kwargs,  # pyright: ignore[reportArgumentType]
 )
 
 metadata = CheckpointMetadata(
@@ -58,24 +62,31 @@ metadata = CheckpointMetadata(
 )
 
 accelerator.init_trackers(
-    "shakespeare_chonky_silu_xavier_1e-5_learned_beta_ASCIITokenizer_big_data_debugging",
+    "shakespeare_chonky_silu_xavier_1e-5_learned_beta_ASCIITokenizer_big_data_elu_alphavar",
 )
 
-checkpoint_dir = "./checkpoint/shakespeare_chonky_silu_xavier_1e-5_learned_beta_ASCIITokenizer_big_data_debugging"
+checkpoint_dir = "./checkpoint/shakespeare_chonky_silu_xavier_1e-5_learned_beta_ASCIITokenizer_big_data_elu_alphavar"
 checkpoint_manager = CheckpointManager()
-checkpoint_manager.prepare(model, opt, accelerator, metadata)
+checkpoint_manager.prepare(model, body_opt, schedule_opt, accelerator, metadata)
 checkpoint_manager.load(checkpoint_dir, error_if_not_exists=False)
 
-model, opt = checkpoint_manager.model, checkpoint_manager.optimizer
+model, body_opt, schedule_opt = (
+    checkpoint_manager.model,
+    checkpoint_manager.body_optimizer,
+    checkpoint_manager.schedule_optimizer,
+)
 train_dl = accelerator.prepare(train_dl)
 
-assert model is not None
 
-epochs = 2_113_000
+assert model is not None
+assert isinstance(model, DiscreteModel)
+
+epochs = 2_510_000
 
 train_discrete_model(
     model,
-    opt,
+    body_opt,
+    schedule_opt,
     train_dl,
     starting_epoch=checkpoint_manager.current_epoch,
     epochs=epochs,

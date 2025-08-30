@@ -39,7 +39,8 @@ class CheckpointMetadata:
 class CheckpointManager:
     def __init__(self):
         self.model: nn.Module | None = None
-        self.optimizer: Optimizer | None = None
+        self.body_optimizer: Optimizer | None = None
+        self.schedule_optimizer: Optimizer | None = None
         self.accelerator: Accelerator | None = None
         self.metadata: CheckpointMetadata | None = None
         self.current_epoch = 0
@@ -47,14 +48,26 @@ class CheckpointManager:
     def ready(self):
         return (
             self.model is not None
-            and self.optimizer is not None
+            and self.body_optimizer is not None
+            and self.schedule_optimizer is not None
             and self.accelerator is not None
             and self.metadata is not None
         )
 
-    def prepare(self, model, optimizer, accelerator, metadata: CheckpointMetadata):
+    def prepare(
+        self,
+        model,
+        body_optimizer,
+        schedule_optimizer,
+        accelerator,
+        metadata: CheckpointMetadata,
+    ):
+        model, body_optimizer, schedule_optimizer = accelerator.prepare(
+            model, body_optimizer, schedule_optimizer
+        )
         self.model = model
-        self.optimizer = optimizer
+        self.body_optimizer = body_optimizer
+        self.schedule_optimizer = schedule_optimizer
         self.accelerator = accelerator
         self.metadata = metadata
 
@@ -117,9 +130,9 @@ class CheckpointManager:
                 self.accelerator.print(  # pyright: ignore[reportOptionalMemberAccess]
                     f"Checkpoint directory {load_directory} does not exist. Skipping load."
                 )
-                self.model, self.optimizer = (
+                self.model, self.body_optimizer = (
                     self.accelerator.prepare(  # pyright: ignore[reportOptionalMemberAccess]
-                        self.model, self.optimizer
+                        self.model, self.body_optimizer
                     )
                 )
                 return
@@ -131,9 +144,9 @@ class CheckpointManager:
                 self.accelerator.print(  # pyright: ignore[reportOptionalMemberAccess]
                     f"Metadata file not found in {load_directory}. Skipping load."
                 )
-                self.model, self.optimizer = (
+                self.model, self.body_optimizer = (
                     self.accelerator.prepare(  # pyright: ignore[reportOptionalMemberAccess]
-                        self.model, self.optimizer
+                        self.model, self.body_optimizer
                     )
                 )
                 return
@@ -176,9 +189,9 @@ class CheckpointManager:
             and not self.metadata.is_fsdp  # pyright: ignore[reportOptionalMemberAccess]
         ):
             # Case 1
-            self.model, self.optimizer = (
+            self.model, self.body_optimizer = (
                 self.accelerator.prepare(  # pyright: ignore[reportOptionalMemberAccess]
-                    self.model, self.optimizer
+                    self.model, self.body_optimizer
                 )
             )
             self.accelerator.load_state(  # pyright: ignore[reportOptionalMemberAccess]
@@ -207,9 +220,9 @@ class CheckpointManager:
             self.model.load_state_dict(  # pyright: ignore[reportOptionalMemberAccess]
                 state_dict
             )
-            self.model, self.optimizer = (
+            self.model, self.body_optimizer = (
                 self.accelerator.prepare(  # pyright: ignore[reportOptionalMemberAccess]
-                    self.model, self.optimizer
+                    self.model, self.body_optimizer
                 )
             )
         elif (
@@ -225,9 +238,9 @@ class CheckpointManager:
                     os.path.join(load_directory + "_merged", "pytorch_model.bin")
                 )
             )
-            self.model, self.optimizer = (
+            self.model, self.body_optimizer = (
                 self.accelerator.prepare(  # pyright: ignore[reportOptionalMemberAccess]
-                    self.model, self.optimizer
+                    self.model, self.body_optimizer
                 )
             )
             # now delete the merged directory
@@ -244,9 +257,9 @@ class CheckpointManager:
                 accelerators
                 == self.metadata.num_accelerators  # pyright: ignore[reportOptionalMemberAccess]
             ):
-                self.model, self.optimizer = (
+                self.model, self.body_optimizer = (
                     self.accelerator.prepare(  # pyright: ignore[reportOptionalMemberAccess]
-                        self.model, self.optimizer
+                        self.model, self.body_optimizer
                     )
                 )
                 self.accelerator.load_state(  # pyright: ignore[reportOptionalMemberAccess]
@@ -264,9 +277,9 @@ class CheckpointManager:
                         os.path.join(load_directory + "_merged", "pytorch_model.bin")
                     )
                 )
-                self.model, self.optimizer = (
+                self.model, self.body_optimizer = (
                     self.accelerator.prepare(  # pyright: ignore[reportOptionalMemberAccess]
-                        self.model, self.optimizer
+                        self.model, self.body_optimizer
                     )
                 )
                 # now delete the merged directory
