@@ -1,18 +1,19 @@
-import torch
-
-from src.tokenizers.ascii.ascii_tokenizer import ASCIITokenizer as Tokenizer
-from src.datasets.discrete_helper import collate_fn
-from src.nn.models.discrete_model import DiscreteModel
-from src.training.training import train_discrete_model
-from matplotlib import pyplot as plt
-from src.inference.discrete_inference import dis_t, bayesian_inference
-from accelerate import Accelerator
-from src.training.checkpoint import CheckpointMetadata, CheckpointManager
-from safetensors.torch import load_file
-from tqdm.auto import tqdm
 import os
 
-accelerator = Accelerator(log_with="trackio", project_dir="./runs/shakespeare")
+import torch
+from accelerate import Accelerator
+from matplotlib import pyplot as plt
+from safetensors.torch import load_file
+from tqdm.auto import tqdm
+
+from src.datasets.discrete_helper import collate_fn
+from src.inference.discrete_inference import bayesian_inference, dis_t
+from src.nn.models.discrete_model import DiscreteModel
+from src.tokenizers.ascii.ascii_tokenizer import ASCIITokenizer as Tokenizer
+from src.training.checkpoint import CheckpointManager, CheckpointMetadata
+from src.training.training import train_discrete_model
+
+accelerator = Accelerator()
 tokenizer = Tokenizer()
 max_seq_len = 32
 
@@ -74,7 +75,9 @@ while not quit_loop:
         cur_it = torch.tensor([i], device=accelerator.device)
         total_it = torch.tensor([n], device=accelerator.device)
         t = dis_t(cur_it, total_it).to(accelerator.device)
-        dis_beta_1 = torch.ones_like(t, device=accelerator.device) * 0.5
+        dis_beta_1 = torch.ones_like(t, device=accelerator.device) * (
+            20.4054 / tokenizer.vocab_size()
+        )
 
         current_model_input = model_input.clone()
 

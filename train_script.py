@@ -1,26 +1,27 @@
-import torch
-
-from src.tokenizers.ascii.ascii_tokenizer import ASCIITokenizer as Tokenizer
-from src.datasets.shakespeare.shakespeare import ShakespeareDataset
-from src.datasets.discrete_helper import collate_fn
-from src.nn.models.discrete_model import DiscreteModel
-from src.training.training import train_discrete_model
-from matplotlib import pyplot as plt
-from src.inference.discrete_inference import dis_t, bayesian_inference
-from accelerate import Accelerator
-from src.training.checkpoint import CheckpointMetadata, CheckpointManager
-from safetensors.torch import load_file
 import os
+
+import torch
+from accelerate import Accelerator
+from matplotlib import pyplot as plt
+from safetensors.torch import load_file
+
+from src.datasets.discrete_helper import collate_fn
+from src.datasets.shakespeare.shakespeare import ShakespeareDataset
+from src.inference.discrete_inference import bayesian_inference, dis_t
+from src.nn.models.discrete_model import DiscreteModel
+from src.tokenizers.ascii.ascii_tokenizer import ASCIITokenizer as Tokenizer
+from src.training.checkpoint import CheckpointManager, CheckpointMetadata
+from src.training.training import train_discrete_model
 
 accelerator = Accelerator(log_with="tensorboard", project_dir="./runs")
 tokenizer = Tokenizer()
 max_seq_len = 32
-train_ds = ShakespeareDataset(tokenizer=tokenizer, max_length=max_seq_len, beta_1=0.5)
+train_ds = ShakespeareDataset(tokenizer=tokenizer, max_length=max_seq_len)
 train_dl = torch.utils.data.DataLoader(
     train_ds,
     batch_size=64,
     shuffle=True,
-    collate_fn=collate_fn,
+    collate_fn=lambda x: collate_fn(x, tokenizer.vocab_size()),
     num_workers=3 if os.name != "nt" else 0,
 )
 
@@ -64,7 +65,7 @@ checkpoint_manager.load(checkpoint_dir, error_if_not_exists=False)
 model, opt = checkpoint_manager.model, checkpoint_manager.optimizer
 train_dl = accelerator.prepare(train_dl)
 
-epochs = 550_000
+epochs = 5
 
 train_discrete_model(
     model,
@@ -92,7 +93,9 @@ for i in range(1, n + 1):
     cur_it = torch.tensor([i], device=accelerator.device)
     total_it = torch.tensor([n], device=accelerator.device)
     t = dis_t(cur_it, total_it).to(accelerator.device)
-    dis_beta_1 = torch.ones_like(t, device=accelerator.device) * 0.5
+    dis_beta_1 = torch.ones_like(t, device=accelerator.device) * (
+        20.4054 / tokenizer.vocab_size()
+    )
 
     current_model_input = model_input.clone()
 

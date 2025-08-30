@@ -1,10 +1,11 @@
+from sqlite3 import OperationalError
+
 import torch
 from tqdm.auto import tqdm
-from src.training.discrete_loss import loss
-from src.datasets.discrete_helper import beta_t, y_distribution, theta, sample_t
+
+from src.datasets.discrete_helper import beta_t, sample_t, theta, y_distribution
 from src.training.checkpoint import CheckpointManager
-from sqlite3 import OperationalError
-from gradio_client.exceptions import AppError
+from src.training.discrete_loss import loss
 
 
 def train_discrete_model(
@@ -22,7 +23,8 @@ def train_discrete_model(
     try:
         model.train()
         pbar = tqdm(
-            range(starting_epoch, starting_epoch + epochs), desc="Training Discrete Model"
+            range(starting_epoch, starting_epoch + epochs),
+            desc="Training Discrete Model",
         )
         train_iter = iter(train_dl)
         for epoch in pbar:
@@ -33,10 +35,10 @@ def train_discrete_model(
                 ground_truth = next(train_iter)
             x = ground_truth["x"]
             t = ground_truth["t"]
-            beta_1 = ground_truth["beta_1"]
+            alpha = ground_truth["alpha"]
             model_input = ground_truth["theta"]  # batch_size, seq_len, K
             output = model.forward(model_input, t)
-            l = loss(beta_1, t, x, model_output_logits=output)
+            l = loss(alpha, t, x, model_output_logits=output)
             optimizer.zero_grad()
             accelerator.backward(l)
             if accelerator.sync_gradients and grad_clip_norm is not None:
@@ -58,8 +60,3 @@ def train_discrete_model(
         checkpoint_manager.save(save_dir, epoch)
         accelerator.end_training()
         raise KeyboardInterrupt("Training interrupted by user.")
-    except (OperationalError, AppError) as e:
-        print(f"An error occurred during training: {e}")
-        checkpoint_manager.save(save_dir, epoch)
-        accelerator.end_training()
-        raise e
