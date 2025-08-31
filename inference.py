@@ -24,6 +24,9 @@ model_kwargs = {
     "hidden_dim": 512,
     "num_heads": 8,
     "layers": 5,
+    "reference_beta_1": 20.4054 / tokenizer.vocab_size(),
+    "learner_weight": 0.0,
+    "freeze_body": False,
 }
 model = DiscreteModel(**model_kwargs)
 
@@ -46,7 +49,7 @@ metadata = CheckpointMetadata(
     num_accelerators=accelerator.num_processes,
 )
 
-checkpoint_dir = "./checkpoint/shakespeare_chonky_silu_xavier_1e-5_learned_beta_ASCIITokenizer_big_data_debugging"
+checkpoint_dir = "./checkpoint/shakespeare_chonky_silu_xavier_1e-5_learned_beta_ASCIITokenizer_big_data_softplus2_big"
 checkpoint_manager = CheckpointManager()
 print("Preparing model...")
 checkpoint_manager.prepare(model, body_opt, schedule_opt, accelerator, metadata)

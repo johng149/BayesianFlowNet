@@ -69,7 +69,7 @@ def gradient_surgery(
     loss: Tensor,
     var_loss: Tensor,
     div_loss: Tensor,
-    alpha_var_loss: Tensor,
+    # alpha_var_loss: Tensor,
     body: nn.Module,
     schedule: nn.Module,
     grad_clip_norm: float | None = None,
@@ -77,7 +77,7 @@ def gradient_surgery(
     body_optim.zero_grad(set_to_none=True)
     schedule_optim.zero_grad(set_to_none=True)
 
-    l = loss + var_loss + div_loss + alpha_var_loss
+    l = loss + var_loss + div_loss  # + alpha_var_loss
     accelerator.backward(l)
     body_optim.step()
     schedule_optim.step()

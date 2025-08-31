@@ -67,13 +67,23 @@ class DiscreteModel(nn.Module):
         K: int,
         hidden_dim: int,
         num_heads: int,
+        reference_beta_1: float,
         layers: int = 3,
         dropout: float = 0.1,
+        freeze_body: bool = False,
+        learner_weight: float = 0.0,
     ):
         super().__init__()
         assert hidden_dim % num_heads == 0, "hidden_dim must be divisble by num_heads"
-        self.learnable_beta = LearnableBetaScheduleNI()
+        self.learnable_beta = LearnableBetaScheduleNI(
+            reference_beta_1=reference_beta_1, learner_weight=learner_weight
+        )
         self.body = ModelBody(max_seq_len, K, hidden_dim, num_heads, layers, dropout)
+        self._init_weights()
+
+        if freeze_body:
+            for param in self.body.parameters():
+                param.requires_grad = False
 
     def _init_weights(self):
         xavier_uniform_(self.body.emb)
@@ -83,7 +93,7 @@ class DiscreteModel(nn.Module):
 
         for layer in self.body.layers:
             for name, param in layer.named_parameters():
-                if "weight" in name:
+                if "weight" in name and param.ndim > 1:
                     xavier_uniform_(param)
 
     def beta_1(self, K: int, device: str) -> float:

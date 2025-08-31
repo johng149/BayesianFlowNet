@@ -6,7 +6,13 @@ from src.nn.layers.unconstrained_montonic_nn import MonotonicNN
 
 class LearnableBetaScheduleNI(nn.Module):
     def __init__(
-        self, in_d: int = 2, hidden_layers=[128, 128], nb_steps=50, encoding_dim=256
+        self,
+        reference_beta_1: float,
+        in_d: int = 2,
+        hidden_layers=[128, 128],
+        nb_steps=50,
+        encoding_dim=256,
+        learner_weight: float = 0.0,
     ):
         """
         NI stands for Neural Integral.
@@ -22,6 +28,8 @@ class LearnableBetaScheduleNI(nn.Module):
             hidden_layers=hidden_layers,
             nb_steps=nb_steps,
             encoding_dim=encoding_dim,
+            beta_1=reference_beta_1,
+            learner_weight=learner_weight,
         )
 
     def beta_1(self, K: int, device) -> float:

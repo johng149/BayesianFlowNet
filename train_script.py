@@ -36,6 +36,10 @@ model_kwargs = {
     "hidden_dim": 512,
     "num_heads": 8,
     "layers": 5,
+    # beta_1 from https://arxiv.org/html/2407.20294v2 equation 5
+    "reference_beta_1": 20.4054 / tokenizer.vocab_size(),
+    "learner_weight": 0.0,
+    "freeze_body": False,
 }
 model = DiscreteModel(**model_kwargs)
 
@@ -43,7 +47,7 @@ grad_clip_norm = None
 
 optimizer_kwargs = {
     "body_optim_kwargs": {"lr": 1e-4},
-    "schedule_optim_kwargs": {"lr": 8e-5},
+    "schedule_optim_kwargs": {"lr": 5e-5},
 }
 body_opt = torch.optim.Adam(
     model.body.parameters(),
@@ -83,7 +87,7 @@ train_dl = accelerator.prepare(train_dl)
 assert model is not None
 assert isinstance(model, DiscreteModel)
 
-epochs = 2_510_000
+epochs = 1_128_000
 
 train_discrete_model(
     model,
@@ -100,7 +104,7 @@ train_discrete_model(
     folds=folds,
     variance_loss_strength=0.8,
     divergence_loss_strength=0.8,
-    alpha_linearity_loss_strength=0.4,
+    # alpha_linearity_loss_strength=0.4,
 )
 
 schedule = model.learnable_beta

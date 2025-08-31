@@ -221,10 +221,26 @@ class IntegrandNN_PE(nn.Module):
 
 
 class MonotonicNN(nn.Module):
-    def __init__(self, in_d, hidden_layers, nb_steps=50, encoding_dim=32):
+    def __init__(
+        self,
+        in_d,
+        hidden_layers,
+        beta_1: float,
+        nb_steps=50,
+        encoding_dim=32,
+        learner_weight=0.0,
+    ):
         super().__init__()
         # The MonotonicNN takes the variable to be integrated over (dim 1)
         # and conditioning variables (dim in_d-1)
+        # I have found that in practice, this MonotonicNN struggles to learn properly, as such,
+        # will be trying two-stage learning. First, we start with learner_weight = 0.0, so
+        # we skip the integrand network and directly use the approximation beta_1 * ( t ** 2)
+        # as the schedule.
+        # once the main model has been trained to an extent, we freeze the main model and then
+        # train this schedule, with learner weight = 1.0
+        self.learner_weight = learner_weight
+        self.beta_1 = beta_1
         self.integrand = IntegrandNN_PE(in_d, hidden_layers, encoding_dim=encoding_dim)
         self.net_layers = []
         hs = [in_d - 1] + hidden_layers + [1]
@@ -241,23 +257,31 @@ class MonotonicNN(nn.Module):
         self.nb_steps = nb_steps
 
     def forward(self, x, h):
-        # `x` is the variable of integration, `h` is conditioning
-        x0 = torch.zeros_like(x)
+        learner_beta = 0.0
+        reference_beta = self.beta_1 * (x**2)
+        if self.learner_weight > 0.0:
+            # `x` is the variable of integration, `h` is conditioning
+            x0 = torch.zeros_like(x)
 
-        flat_params = _flatten(self.integrand.parameters())
-        # calculate integral up to 1 for normalization
-        # but seems like we don't actually need it?
-        # x1 = torch.ones_like(x)
-        # integral_1 = ParallelNeuralIntegral.apply(x0, x1, self.integrand, flat_params, h, self.nb_steps)
-        integral_x = ParallelNeuralIntegral.apply(
-            x0, x, self.integrand, flat_params, h, self.nb_steps
-        )
-        assert isinstance(integral_x, Tensor)
+            flat_params = _flatten(self.integrand.parameters())
+            # calculate integral up to 1 for normalization
+            # but seems like we don't actually need it?
+            # x1 = torch.ones_like(x)
+            # integral_1 = ParallelNeuralIntegral.apply(x0, x1, self.integrand, flat_params, h, self.nb_steps)
+            integral_x = ParallelNeuralIntegral.apply(
+                x0, x, self.integrand, flat_params, h, self.nb_steps
+            )
+            assert isinstance(integral_x, Tensor)
 
-        integral_norm = integral_x  # / integral_1
+            integral_norm = (
+                integral_x  # / integral_1, seems we don't need this norming?
+            )
 
-        scaling = self.scaling(h)
-        return integral_norm * scaling
+            scaling = self.scaling(h)
+            learner_beta = integral_norm * scaling
+        return (
+            1 - self.learner_weight
+        ) * reference_beta + self.learner_weight * learner_beta
 
     def scaling(self, h):
         # This method returns the scaling factor for the input `h`, maybe useful for debugging

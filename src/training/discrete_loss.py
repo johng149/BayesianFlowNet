@@ -110,6 +110,6 @@ def divergence_loss(x: Tensor, schedule: LearnableBetaScheduleNI) -> Tensor:
     return div_loss
 
 
-def alpha_variance_loss(alpha: Tensor) -> Tensor:
-    alpha_std = torch.std(alpha)
-    return -torch.log(alpha_std) / (1 + 4.9 * alpha_std)
+# def alpha_variance_loss(alpha: Tensor) -> Tensor:
+#     alpha_std = torch.std(alpha)
+#     return -torch.log(alpha_std) / (1 + 4.9 * alpha_std)

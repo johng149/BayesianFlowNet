@@ -5,8 +5,7 @@ from tqdm.auto import tqdm
 
 from src.nn.models.discrete_model import DiscreteModel
 from src.training.checkpoint import CheckpointManager
-from src.training.discrete_loss import (
-    alpha_variance_loss,
+from src.training.discrete_loss import (  # alpha_variance_loss,
     divergence_loss,
     format_loss,
     loss,
@@ -30,7 +29,7 @@ def train_discrete_model(
     save_every: int = 100,
     variance_loss_strength: float = 1.0,
     divergence_loss_strength: float = 0.5,
-    alpha_linearity_loss_strength: float = 0.2,
+    # alpha_linearity_loss_strength: float = 0.2,
 ):
     """
     Args:
@@ -51,7 +50,6 @@ def train_discrete_model(
         save_every: Save checkpoint every X epochs
         variance_loss_strength: Strength of the variance loss
         divergence_loss_strength: Strength of the divergence loss
-        alpha_linearity_loss_strength: Strength of the alpha linearity loss
     """
     epoch = starting_epoch
     # debug_data_past_epoch = {}
@@ -78,11 +76,11 @@ def train_discrete_model(
             )
             l_infty_loss = loss(formatted_loss)
             var_loss = variance_loss(formatted_loss) * variance_loss_strength
-            alpha_var_loss = alpha_variance_loss(alpha) * alpha_linearity_loss_strength
+            # alpha_var_loss = alpha_variance_loss(alpha) * alpha_linearity_loss_strength
             div_loss = (
                 divergence_loss(x, model.learnable_beta) * divergence_loss_strength
             )
-            l = l_infty_loss + var_loss + div_loss + alpha_var_loss
+            l = l_infty_loss + var_loss + div_loss  # + alpha_var_loss
             # debug_data_current_epoch = {
             #     "x": x,
             #     "t": t,
@@ -112,7 +110,7 @@ def train_discrete_model(
                 loss=l_infty_loss,
                 var_loss=var_loss,
                 div_loss=div_loss,
-                alpha_var_loss=alpha_var_loss,
+                # alpha_var_loss=alpha_var_loss,
                 body=model.body,
                 schedule=model.learnable_beta,
                 grad_clip_norm=grad_clip_norm,
@@ -127,7 +125,7 @@ def train_discrete_model(
                     "l_infty_loss": l_infty_loss.item(),
                     "var_loss": var_loss.item(),
                     "div_loss": div_loss.item(),
-                    "alpha_var_loss": alpha_var_loss.item(),
+                    # "alpha_var_loss": alpha_var_loss.item(),
                     "beta_1": model.beta_1(x.shape[-1], device=accelerator.device),
                 },
                 step=epoch,
