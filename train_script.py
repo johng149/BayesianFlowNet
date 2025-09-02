@@ -38,12 +38,13 @@ model_kwargs = {
     "layers": 5,
     # beta_1 from https://arxiv.org/html/2407.20294v2 equation 5
     "reference_beta_1": 20.4054 / tokenizer.vocab_size(),
-    "learner_weight": 0.0,
+    "learner_weight": 1.0,
     "freeze_body": False,
 }
 model = DiscreteModel(**model_kwargs)
 
 grad_clip_norm = None
+skip_schedule_optim = False
 
 optimizer_kwargs = {
     "body_optim_kwargs": {"lr": 1e-4},
@@ -83,11 +84,14 @@ model, body_opt, schedule_opt = (
 )
 train_dl = accelerator.prepare(train_dl)
 
-
 assert model is not None
 assert isinstance(model, DiscreteModel)
 
-epochs = 1_128_000
+# check that all parameters in model body is frozen
+# for param in model.body.parameters():
+#     assert not param.requires_grad
+
+epochs = 1_300_000
 
 train_discrete_model(
     model,
@@ -105,6 +109,7 @@ train_discrete_model(
     variance_loss_strength=0.8,
     divergence_loss_strength=0.8,
     # alpha_linearity_loss_strength=0.4,
+    skip_schedule_optim=skip_schedule_optim,
 )
 
 schedule = model.learnable_beta

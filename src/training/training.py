@@ -27,9 +27,10 @@ def train_discrete_model(
     folds: int,
     grad_clip_norm=None,
     save_every: int = 100,
-    variance_loss_strength: float = 1.0,
-    divergence_loss_strength: float = 0.5,
+    variance_loss_strength: float = 0.8,
+    divergence_loss_strength: float = 0.8,
     # alpha_linearity_loss_strength: float = 0.2,
+    skip_schedule_optim: bool = False,
 ):
     """
     Args:
@@ -114,6 +115,7 @@ def train_discrete_model(
                 body=model.body,
                 schedule=model.learnable_beta,
                 grad_clip_norm=grad_clip_norm,
+                skip_schedule_optim=skip_schedule_optim,
             )
 
             # if we get here, then loss was fine and no NaN detected in gradients either

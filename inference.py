@@ -24,8 +24,9 @@ model_kwargs = {
     "hidden_dim": 512,
     "num_heads": 8,
     "layers": 5,
+    # beta_1 from https://arxiv.org/html/2407.20294v2 equation 5
     "reference_beta_1": 20.4054 / tokenizer.vocab_size(),
-    "learner_weight": 0.0,
+    "learner_weight": 1.0,
     "freeze_body": False,
 }
 model = DiscreteModel(**model_kwargs)

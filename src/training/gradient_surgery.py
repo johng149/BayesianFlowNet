@@ -73,6 +73,7 @@ def gradient_surgery(
     body: nn.Module,
     schedule: nn.Module,
     grad_clip_norm: float | None = None,
+    skip_schedule_optim: bool = False,
 ):
     body_optim.zero_grad(set_to_none=True)
     schedule_optim.zero_grad(set_to_none=True)
@@ -80,7 +81,8 @@ def gradient_surgery(
     l = loss + var_loss + div_loss  # + alpha_var_loss
     accelerator.backward(l)
     body_optim.step()
-    schedule_optim.step()
+    if not skip_schedule_optim:
+        schedule_optim.step()
 
     # accelerator.backward(l, retain_graph=True)
     # if accelerator.sync_gradients and grad_clip_norm is not None:

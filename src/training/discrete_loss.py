@@ -75,7 +75,16 @@ def variance_loss(
     return torch.mean(torch.std(formatted_loss, dim=-1))
 
 
-def divergence_loss(x: Tensor, schedule: LearnableBetaScheduleNI) -> Tensor:
+# note to self:
+# do NOT use target beta_1 value as a loss function for divergence such as
+# torch.mean((learned_beta_1 - 20.4054 / K)**2)
+# it does NOT work. The reason is because model is greatly incentivized to make
+# derivative of beta schedule (alpha) zero since the main loss is scaled by alpha
+# thus making learned beta approach 0. Only KL divergence (as programmed below)
+# helps mitigate this issue
+def divergence_loss(
+    x: Tensor, schedule: LearnableBetaScheduleNI, target_kl: float = 1.03
+) -> Tensor:
     """
     Divergence loss is a regularization term that is intended to help train
     the learnable schedule. As noted in the paper, at timestep `t = 1.0`, the
@@ -88,9 +97,15 @@ def divergence_loss(x: Tensor, schedule: LearnableBetaScheduleNI) -> Tensor:
 
     For more information, see https://arxiv.org/pdf/2308.07037 equation 69
 
+    However, excessive penalties can cause the schedule to prefer ever increasing
+    beta values, which, in practice, appears to prevent convergence. As such,
+    we need a target KL divergence value to discourage the optimizer from
+    exploring excessively high beta values.
+
     Args:
         x: Ground truth tensor of shape (batch_folds, seq_len, K).
         schedule: Learnable beta schedule.
+        target_kl: Target KL divergence value.
     Returns:
         Divergence loss tensor.
     """
@@ -105,9 +120,18 @@ def divergence_loss(x: Tensor, schedule: LearnableBetaScheduleNI) -> Tensor:
     beta_1_probs = F.log_softmax(beta_1_dist, dim=-1)
 
     # now we can compute the divergence loss
-    div_loss = F.kl_div(beta_1_probs, x, reduction="batchmean", log_target=False)
+    kl = F.kl_div(beta_1_probs, x, reduction="batchmean", log_target=False)
 
-    return div_loss
+    div_loss = (kl - target_kl) ** 2
+
+    # pseudo-huber loss for when kl is greater than or equal to target_kl
+    # torch.sqrt(1 + (div_loss**2)) - 1
+
+    # pseudo-huber-loss for when kl is less than target_kl
+    # δ = 1.6, δ**2 * (torch.sqrt(1 + (div_loss / δ)**2) - 1)
+
+    delta = 1.6 if kl < target_kl else 1.0
+    return (delta**2) * (torch.sqrt(1 + (div_loss / delta) ** 2) - 1)
 
 
 # def alpha_variance_loss(alpha: Tensor) -> Tensor:
