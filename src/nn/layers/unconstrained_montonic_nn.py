@@ -143,19 +143,17 @@ class ParallelNeuralIntegral(torch.autograd.Function):
 
 # PositionalEncoding is LLM generated, but works well enough. Will look into more principaled
 # https://arxiv.org/abs/2006.10739 (Fourier Features paper) later
+# actually we are trying to use monotonic functions here for the
+# Advancing Constrained Monotonic Neural Network paper, which needs monotonic inputs
 class PositionalEncoding(nn.Module):
-    def __init__(self, encoding_dim: int):
+    def __init__(self, encoding_dim: int, scaling: float = 3.0, epsilon: float = 1e-8):
         super().__init__()
         self.encoding_dim = encoding_dim
-
-        # Create the division term for the sinusoidal functions.
-        # This is a constant, so we register it as a buffer.
-        # The shape is (encoding_dim // 2).
-        div_term = torch.exp(
-            torch.arange(0, encoding_dim, 2).float()
-            * (-math.log(10000.0) / encoding_dim)
-        )
-        self.register_buffer("div_term", div_term)
+        self.scaling = scaling
+        self.epsilon = epsilon
+        self.register_buffer("centers", torch.randn(encoding_dim))
+        self.register_buffer("exp_scales", torch.logspace(-2, 0, encoding_dim))
+        self.register_buffer("log_offsets", torch.logspace(-1, 1, encoding_dim))
 
     def forward(self, t: Tensor) -> Tensor:
         """
@@ -164,19 +162,47 @@ class PositionalEncoding(nn.Module):
         Returns:
             A tensor of shape (batch_size, encoding_dim + 1) with positional encodings.
         """
-        # Create the sinusoidal encodings
-        # pe will have shape (batch_size, encoding_dim)
-        pe = torch.zeros(t.shape[0], self.encoding_dim, device=t.device)
-        pe[:, 0::2] = torch.sin(
-            t * self.div_term  # pyright: ignore[reportOperatorIssue]
-        )
-        pe[:, 1::2] = torch.cos(
-            t * self.div_term  # pyright: ignore[reportOperatorIssue]
-        )
+        centers = self.centers
+        assert isinstance(centers, Tensor)
+        diffs = t.unsqueeze(-1) - centers
+        sigmoid_features = torch.sigmoid(self.scaling * diffs).squeeze(1)
+
+        exp_scales = self.exp_scales
+        assert isinstance(exp_scales, Tensor)
+        exp_features = torch.exp(exp_scales * t)
+
+        log_offsets = self.log_offsets
+        assert isinstance(log_offsets, Tensor)
+        log_features = torch.log(t + log_offsets + self.epsilon)
+
+        pe = (sigmoid_features + exp_features + log_features) / 3
 
         # Concatenate the original time 't' with its encoding.
         # This gives the network access to both the raw time and its non-linear features.
         return torch.cat([t, pe], dim=1)
+
+
+class MonotonicLinear(nn.Linear):
+    def __init__(
+        self,
+        in_features: int,
+        out_features: int,
+        bias: bool = True,
+        device=None,
+        dtype=None,
+        pre_activation: nn.Module = nn.Identity(),
+    ):
+        super().__init__(
+            in_features, out_features, bias=bias, device=device, dtype=dtype
+        )
+        self.act = pre_activation
+
+    def forward(self, input):
+        w_pos = self.weight.clamp(min=0.0)
+        w_neg = self.weight.clamp(max=0.0)
+        x_pos = F.linear(self.act(input), w_pos, self.bias)
+        x_neg = F.linear(self.act(-input), w_neg, self.bias)
+        return x_pos + x_neg
 
 
 class IntegrandNN_PE(nn.Module):
@@ -191,15 +217,11 @@ class IntegrandNN_PE(nn.Module):
 
         self.net_layers = []
         hs = [net_input_dim] + hidden_layers + [1]
+        i = 0
         for h0, h1 in zip(hs, hs[1:]):
-            self.net_layers.extend(
-                [
-                    nn.Linear(h0, h1),
-                    nn.ReLU(),
-                ]
-            )
-        self.net_layers.pop()
-        # self.net.append(nn.ELU()) we just take exp of model output instead
+            activation = nn.Identity() if i == 0 else nn.ReLU()
+            self.net_layers.extend([MonotonicLinear(h0, h1, pre_activation=activation)])
+            i += 1
         self.net = nn.Sequential(*self.net_layers)
 
     def forward(self, t, h):
@@ -275,6 +297,9 @@ class MonotonicNN(nn.Module):
 
             integral_norm = (
                 integral_x  # / integral_1, seems we don't need this norming?
+                # it's actually even worse than that. If we try to hard-code a target beta_1
+                # value by doing beta_1 * integral_norm at time t=1.0, we have a much higher chance of ending up
+                # with NaN loss, for whatever reason
             )
 
             scaling = self.scaling(h)

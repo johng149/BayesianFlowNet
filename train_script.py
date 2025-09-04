@@ -69,10 +69,10 @@ metadata = CheckpointMetadata(
 )
 
 accelerator.init_trackers(
-    "shakespeare_chonky_silu_xavier_1e-5_learned_beta_ASCIITokenizer_big_data_softplus2_big",
+    "shakespeare_ASCII",
 )
 
-checkpoint_dir = "./checkpoint/shakespeare_chonky_silu_xavier_1e-5_learned_beta_ASCIITokenizer_big_data_softplus2_big"
+checkpoint_dir = "./checkpoint/shakespeare_ASCII"
 checkpoint_manager = CheckpointManager()
 checkpoint_manager.prepare(model, body_opt, schedule_opt, accelerator, metadata)
 checkpoint_manager.load(checkpoint_dir, error_if_not_exists=False)
@@ -108,7 +108,7 @@ train_discrete_model(
     folds=folds,
     variance_loss_strength=0.8,
     divergence_loss_strength=0.8,
-    # alpha_linearity_loss_strength=0.4,
+    alpha_linearity_loss_strength=0.4,
     skip_schedule_optim=skip_schedule_optim,
 )
 

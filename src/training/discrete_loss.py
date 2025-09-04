@@ -83,7 +83,7 @@ def variance_loss(
 # thus making learned beta approach 0. Only KL divergence (as programmed below)
 # helps mitigate this issue
 def divergence_loss(
-    x: Tensor, schedule: LearnableBetaScheduleNI, target_kl: float = 1.03
+    x: Tensor, schedule: LearnableBetaScheduleNI, target_kl: float = 1.68
 ) -> Tensor:
     """
     Divergence loss is a regularization term that is intended to help train
@@ -116,24 +116,48 @@ def divergence_loss(
     beta_1 = schedule(t_1, K)
 
     # next, we use that to create the perturbed input distribution
-    beta_1_dist = y_distribution(beta_1, K, x)  # should be logits
+    beta_1_dist = y_distribution(beta_1, K, x, deterministic=True)  # should be logits
     beta_1_probs = F.log_softmax(beta_1_dist, dim=-1)
 
     # now we can compute the divergence loss
     kl = F.kl_div(beta_1_probs, x, reduction="batchmean", log_target=False)
 
-    div_loss = (kl - target_kl) ** 2
+    # div_loss = (kl - target_kl) ** 2
 
-    # pseudo-huber loss for when kl is greater than or equal to target_kl
-    # torch.sqrt(1 + (div_loss**2)) - 1
+    # # pseudo-huber loss for when kl is greater than or equal to target_kl
+    # # torch.sqrt(1 + (div_loss**2)) - 1
 
-    # pseudo-huber-loss for when kl is less than target_kl
-    # δ = 1.6, δ**2 * (torch.sqrt(1 + (div_loss / δ)**2) - 1)
+    # # pseudo-huber-loss for when kl is less than target_kl
+    # # δ = 1.6, δ**2 * (torch.sqrt(1 + (div_loss / δ)**2) - 1)
 
-    delta = 1.6 if kl < target_kl else 1.0
-    return (delta**2) * (torch.sqrt(1 + (div_loss / delta) ** 2) - 1)
+    # delta = 1.6 if kl < target_kl else 1.0
+    # return (delta**2) * (torch.sqrt(1 + (div_loss / delta) ** 2) - 1)
+    return kl
 
 
-# def alpha_variance_loss(alpha: Tensor) -> Tensor:
-#     alpha_std = torch.std(alpha)
-#     return -torch.log(alpha_std) / (1 + 4.9 * alpha_std)
+def alpha_variance_loss(
+    alpha: Tensor, target_variance: float = 1.0, delta: float = 1.0
+) -> Tensor:
+    alpha_std = torch.std(alpha)
+    alpha_std_loss = (alpha_std - target_variance) ** 2
+
+    return (delta**2) * (torch.sqrt(1 + (alpha_std_loss / delta) ** 2) - 1)
+
+
+def alpha_below_linear_loss(x: Tensor, schedule: LearnableBetaScheduleNI) -> Tensor:
+    t_sample = torch.rand(x.shape[0], device=x.device)
+    _, alpha_sample = schedule.get_alpha(t_sample, x.shape[-1])
+    t_sample, t_sample_i = torch.sort(t_sample)
+    alpha_sample = alpha_sample[t_sample_i]
+
+    t_boundaries = torch.tensor([0.0, 1.0], device=x.device)
+    _, alpha_boundaries = schedule.get_alpha(t_boundaries, x.shape[-1])
+
+    # create linear best fit line using alpha boundaries
+    slope = alpha_boundaries[1] - alpha_boundaries[0]
+    linear_alpha = slope * t_sample + alpha_boundaries[0]
+
+    above_line = alpha_sample - linear_alpha
+    above_line = F.relu(above_line)
+
+    return torch.mean(above_line)

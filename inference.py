@@ -50,7 +50,7 @@ metadata = CheckpointMetadata(
     num_accelerators=accelerator.num_processes,
 )
 
-checkpoint_dir = "./checkpoint/shakespeare_chonky_silu_xavier_1e-5_learned_beta_ASCIITokenizer_big_data_softplus2_big"
+checkpoint_dir = "./checkpoint/shakespeare_ASCII"
 checkpoint_manager = CheckpointManager()
 print("Preparing model...")
 checkpoint_manager.prepare(model, body_opt, schedule_opt, accelerator, metadata)

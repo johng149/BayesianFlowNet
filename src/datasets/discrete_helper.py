@@ -5,7 +5,9 @@ from torch import Tensor
 from torch.nn import functional as F
 
 
-def y_distribution(beta: Tensor, K: int, kron_x: Tensor) -> Tensor:
+def y_distribution(
+    beta: Tensor, K: int, kron_x: Tensor, deterministic: bool = False
+) -> Tensor:
     """
     Args:
         beta: Tensor of accuracy values for each batch of shape (batch_size,).
@@ -20,7 +22,11 @@ def y_distribution(beta: Tensor, K: int, kron_x: Tensor) -> Tensor:
     )  # allows for broadcasting with reach appropriate batch in kron_x
     mean = beta * (K * kron_x - 1)
     variance = beta * K
-    epsilon = torch.normal(0, 1, kron_x.shape, device=kron_x.device)
+    epsilon = (
+        torch.normal(0, 1, kron_x.shape, device=kron_x.device)
+        if not deterministic
+        else torch.ones_like(kron_x)
+    )
     return mean + (variance**0.5) * epsilon
 
 
