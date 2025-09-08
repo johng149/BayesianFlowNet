@@ -25,7 +25,7 @@ def y_distribution(
     epsilon = (
         torch.normal(0, 1, kron_x.shape, device=kron_x.device)
         if not deterministic
-        else torch.ones_like(kron_x)
+        else 0.0
     )
     return mean + (variance**0.5) * epsilon
 

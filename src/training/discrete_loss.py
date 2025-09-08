@@ -1,5 +1,8 @@
+from math import log
+
 import torch
 from torch import Tensor, nn
+from torch.distributions import Categorical
 from torch.nn import functional as F
 
 from src.common.types import DiscreteFormattedLoss
@@ -111,28 +114,51 @@ def divergence_loss(
     """
     batch_folds, seq_len, K = x.shape  # batch_folds is batch_size * folds
 
-    # first, we find what the schedule thinks beta_1 should be
-    t_1 = torch.ones(batch_folds, device=x.device)
-    beta_1 = schedule(t_1, K)
+    # trying a new version of this based on https://arxiv.org/html/2308.07037v6 section 6.8
+    t = torch.rand(batch_folds, device=x.device)
+    beta_t = schedule(t, K)
+    beta_t_dist = y_distribution(beta_t, K, x, deterministic=True)  # should be logits
+    beta_cat = Categorical(logits=beta_t_dist)
 
-    # next, we use that to create the perturbed input distribution
-    beta_1_dist = y_distribution(beta_1, K, x, deterministic=True)  # should be logits
-    beta_1_probs = F.log_softmax(beta_1_dist, dim=-1)
+    entropy = beta_cat.entropy()  # should be shape (batch_folds, seq_len)
+    assert entropy.shape == (
+        batch_folds,
+        seq_len,
+    ), f"Expected entropy shape {(batch_folds, seq_len)}, got {entropy.shape}"
+    seq_expected_entropy = torch.mean(entropy, dim=-1)  # shape (batch_folds,)
 
-    # now we can compute the divergence loss
-    kl = F.kl_div(beta_1_probs, x, reduction="batchmean", log_target=False)
+    # the entropy of a uniform categorical distribution with K classes is ln(K)
+    # the paper says we want the entropy to linearly decrease from ln(K) to 0
+    # as t goes from 0 to 1. This means the slope of the decrease is -ln(K)
+    # thus the expected entropy of the distribution at time t is:
+    # ln(K) - ln(K) * t = ln(K) * (1 - t)
+    target_entropy = log(K) * (1 - t)  # shape (batch_folds,)
 
-    # div_loss = (kl - target_kl) ** 2
+    divergence = torch.mean((seq_expected_entropy - target_entropy) ** 2)
+    return divergence
 
-    # # pseudo-huber loss for when kl is greater than or equal to target_kl
-    # # torch.sqrt(1 + (div_loss**2)) - 1
+    # # first, we find what the schedule thinks beta_1 should be
+    # t_1 = torch.ones(batch_folds, device=x.device)
+    # beta_1 = schedule(t_1, K)
 
-    # # pseudo-huber-loss for when kl is less than target_kl
-    # # δ = 1.6, δ**2 * (torch.sqrt(1 + (div_loss / δ)**2) - 1)
+    # # next, we use that to create the perturbed input distribution
+    # beta_1_dist = y_distribution(beta_1, K, x, deterministic=True)  # should be logits
+    # beta_1_probs = F.log_softmax(beta_1_dist, dim=-1)
 
-    # delta = 1.6 if kl < target_kl else 1.0
-    # return (delta**2) * (torch.sqrt(1 + (div_loss / delta) ** 2) - 1)
-    return kl
+    # # now we can compute the divergence loss
+    # kl = F.kl_div(beta_1_probs, x, reduction="batchmean", log_target=False)
+
+    # # div_loss = (kl - target_kl) ** 2
+
+    # # # pseudo-huber loss for when kl is greater than or equal to target_kl
+    # # # torch.sqrt(1 + (div_loss**2)) - 1
+
+    # # # pseudo-huber-loss for when kl is less than target_kl
+    # # # δ = 1.6, δ**2 * (torch.sqrt(1 + (div_loss / δ)**2) - 1)
+
+    # # delta = 1.6 if kl < target_kl else 1.0
+    # # return (delta**2) * (torch.sqrt(1 + (div_loss / delta) ** 2) - 1)
+    # return kl
 
 
 def alpha_variance_loss(

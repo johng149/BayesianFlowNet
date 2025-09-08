@@ -69,10 +69,10 @@ metadata = CheckpointMetadata(
 )
 
 accelerator.init_trackers(
-    "shakespeare_ASCII",
+    "shakespeare_ASCII_shannon",
 )
 
-checkpoint_dir = "./checkpoint/shakespeare_ASCII"
+checkpoint_dir = "./checkpoint/shakespeare_ASCII_shannon"
 checkpoint_manager = CheckpointManager()
 checkpoint_manager.prepare(model, body_opt, schedule_opt, accelerator, metadata)
 checkpoint_manager.load(checkpoint_dir, error_if_not_exists=False)
