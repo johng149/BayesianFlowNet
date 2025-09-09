@@ -79,7 +79,8 @@ def train_discrete_model(
             var_loss = variance_loss(formatted_loss) * variance_loss_strength
             # alpha_var_loss = alpha_variance_loss(alpha) * alpha_linearity_loss_strength
             div_loss = (
-                divergence_loss(x, model.learnable_beta) * divergence_loss_strength
+                divergence_loss(x, model.learnable_beta, folds)
+                * divergence_loss_strength
             )
             l = l_infty_loss + var_loss + div_loss  # + alpha_var_loss
             # debug_data_current_epoch = {
@@ -104,22 +105,18 @@ def train_discrete_model(
 
             # optimizer.zero_grad()
             # accelerator.backward(l)
-            gradient_surgery(
-                accelerator,
-                body_optim=body_optimizer,
-                schedule_optim=schedule_optimizer,
-                loss=l_infty_loss,
-                var_loss=var_loss,
-                div_loss=div_loss,
-                # alpha_var_loss=alpha_var_loss,
-                body=model.body,
-                schedule=model.learnable_beta,
-                grad_clip_norm=grad_clip_norm,
-                skip_schedule_optim=skip_schedule_optim,
-            )
 
             # if we get here, then loss was fine and no NaN detected in gradients either
             # debug_data_past_epoch = debug_data_current_epoch
+
+            body_optimizer.zero_grad()
+            schedule_optimizer.zero_grad()
+            accelerator.backward(l)
+            if accelerator.sync_gradients and grad_clip_norm is not None:
+                accelerator.clip_grad_norm_(model.parameters(), grad_clip_norm)
+            body_optimizer.step()
+            if not skip_schedule_optim:
+                schedule_optimizer.step()
 
             accelerator.log(
                 {

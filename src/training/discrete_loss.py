@@ -1,5 +1,9 @@
+from math import log
+
+import einops
 import torch
 from torch import Tensor, nn
+from torch.distributions import Categorical
 from torch.nn import functional as F
 
 from src.common.types import DiscreteFormattedLoss
@@ -75,15 +79,8 @@ def variance_loss(
     return torch.mean(torch.std(formatted_loss, dim=-1))
 
 
-# note to self:
-# do NOT use target beta_1 value as a loss function for divergence such as
-# torch.mean((learned_beta_1 - 20.4054 / K)**2)
-# it does NOT work. The reason is because model is greatly incentivized to make
-# derivative of beta schedule (alpha) zero since the main loss is scaled by alpha
-# thus making learned beta approach 0. Only KL divergence (as programmed below)
-# helps mitigate this issue
 def divergence_loss(
-    x: Tensor, schedule: LearnableBetaScheduleNI, target_kl: float = 1.03
+    x: Tensor, schedule: LearnableBetaScheduleNI, folds: int, samples: int = 64
 ) -> Tensor:
     """
     Divergence loss is a regularization term that is intended to help train
@@ -97,43 +94,67 @@ def divergence_loss(
 
     For more information, see https://arxiv.org/pdf/2308.07037 equation 69
 
-    However, excessive penalties can cause the schedule to prefer ever increasing
-    beta values, which, in practice, appears to prevent convergence. As such,
-    we need a target KL divergence value to discourage the optimizer from
-    exploring excessively high beta values.
+    Looking at section 6.8, we see that we actually want the entropy to decrease
+    linearly with time. At `t=0.0` we have maximum entropy (ln(K)) while at
+    `t=1.0` we have minimum entropy (0). Note that due to Jensen's inequality,
+    we will need to use Monte Carlo sampling to estimate the entropy of the
+    distribution
 
     Args:
         x: Ground truth tensor of shape (batch_folds, seq_len, K).
         schedule: Learnable beta schedule.
-        target_kl: Target KL divergence value.
+        folds: Number of folds used for loss variance estimation.
+        samples: Number of Monte Carlo samples to use for entropy estimation.
     Returns:
         Divergence loss tensor.
     """
-    batch_folds, seq_len, K = x.shape  # batch_folds is batch_size * folds
 
-    # first, we find what the schedule thinks beta_1 should be
-    t_1 = torch.ones(batch_folds, device=x.device)
-    beta_1 = schedule(t_1, K)
+    # batch_folds is batch_size * folds, `batch_size` referes to the unique
+    # x samples while `folds` refers to the different times that were sampled
+    # for each unique `x`. To get an entropy estimate, we'll need to repeat
+    # each of the folds time samples
+    batch_folds, seq_len, K = x.shape
+    assert (
+        batch_folds % folds == 0
+    ), f"batch_folds {batch_folds} must be divisible by folds {folds}"
+    batch_size = batch_folds // folds
 
-    # next, we use that to create the perturbed input distribution
-    beta_1_dist = y_distribution(beta_1, K, x)  # should be logits
-    beta_1_probs = F.log_softmax(beta_1_dist, dim=-1)
+    # for each `x`, sample `folds` timesteps
+    t = torch.rand(batch_folds, device=x.device)
 
-    # now we can compute the divergence loss
-    kl = F.kl_div(beta_1_probs, x, reduction="batchmean", log_target=False)
+    beta_t = schedule.forward(t, K)
 
-    div_loss = (kl - target_kl) ** 2
+    beta_t = einops.repeat(
+        beta_t,
+        "(batch_size folds) -> (batch_size folds samples)",
+        batch_size=batch_size,
+        folds=folds,
+        samples=samples,
+    )
 
-    # pseudo-huber loss for when kl is greater than or equal to target_kl
-    # torch.sqrt(1 + (div_loss**2)) - 1
+    x = einops.repeat(
+        x,
+        "(batch_size folds) seq_len K -> (batch_size folds samples) seq_len K",
+        batch_size=batch_size,
+        folds=folds,
+        samples=samples,
+    )
 
-    # pseudo-huber-loss for when kl is less than target_kl
-    # δ = 1.6, δ**2 * (torch.sqrt(1 + (div_loss / δ)**2) - 1)
+    logits = y_distribution(beta_t, K, x)
+    cat = Categorical(logits=logits)
 
-    delta = 1.6 if kl < target_kl else 1.0
-    return (delta**2) * (torch.sqrt(1 + (div_loss / delta) ** 2) - 1)
+    entropy = cat.entropy()  # should be shape (batch_size * folds * samples, seq_len)
 
+    expected_entropy = einops.reduce(
+        entropy,
+        "(batch_size folds samples) seq_len -> (batch_size folds)",
+        "mean",
+        batch_size=batch_size,
+        folds=folds,
+        samples=samples,
+    )
 
-# def alpha_variance_loss(alpha: Tensor) -> Tensor:
-#     alpha_std = torch.std(alpha)
-#     return -torch.log(alpha_std) / (1 + 4.9 * alpha_std)
+    target_entropy = log(K) * (1 - t)
+
+    div = F.mse_loss(expected_entropy, target_entropy, reduction="mean")
+    return div

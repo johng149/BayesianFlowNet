@@ -69,10 +69,10 @@ metadata = CheckpointMetadata(
 )
 
 accelerator.init_trackers(
-    "shakespeare_chonky_silu_xavier_1e-5_learned_beta_ASCIITokenizer_big_data_softplus2_big",
+    "shakespeare_shannon_ASCII",
 )
 
-checkpoint_dir = "./checkpoint/shakespeare_chonky_silu_xavier_1e-5_learned_beta_ASCIITokenizer_big_data_softplus2_big"
+checkpoint_dir = "./checkpoint/shakespeare_shannon_ASCII"
 checkpoint_manager = CheckpointManager()
 checkpoint_manager.prepare(model, body_opt, schedule_opt, accelerator, metadata)
 checkpoint_manager.load(checkpoint_dir, error_if_not_exists=False)
