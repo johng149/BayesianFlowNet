@@ -22,6 +22,7 @@ def y_distribution(
     )  # allows for broadcasting with reach appropriate batch in kron_x
     mean = beta * (K * kron_x - 1)
     variance = beta * K
+    assert torch.all(variance >= 0), f"Variance has negative values with beta: {beta}"
     epsilon = (
         torch.normal(0, 1, kron_x.shape, device=kron_x.device)
         if not deterministic

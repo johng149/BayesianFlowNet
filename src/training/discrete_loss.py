@@ -117,7 +117,14 @@ def divergence_loss(
     # trying a new version of this based on https://arxiv.org/html/2308.07037v6 section 6.8
     t = torch.rand(batch_folds, device=x.device)
     beta_t = schedule(t, K)
-    beta_t_dist = y_distribution(beta_t, K, x, deterministic=True)  # should be logits
+    try:
+        beta_t_dist = y_distribution(
+            beta_t, K, x, deterministic=True
+        )  # should be logits
+    except AssertionError as e:
+        raise RuntimeError(
+            f"Error in divergence_loss with beta_t: {beta_t} at time {t}"
+        ) from e
     beta_cat = Categorical(logits=beta_t_dist)
 
     entropy = beta_cat.entropy()  # should be shape (batch_folds, seq_len)
