@@ -229,6 +229,7 @@ class MonotonicNN(nn.Module):
         nb_steps=50,
         encoding_dim=32,
         learner_weight=0.0,
+        epsilon: float = 1e-8,
     ):
         super().__init__()
         # The MonotonicNN takes the variable to be integrated over (dim 1)
@@ -256,6 +257,8 @@ class MonotonicNN(nn.Module):
         self.net = nn.Sequential(*self.net_layers)
         self.nb_steps = nb_steps
 
+        self.epsilon = epsilon
+
     def forward(self, x, h):
         learner_beta = 0.0
         reference_beta = self.beta_1 * (x**2)
@@ -278,7 +281,7 @@ class MonotonicNN(nn.Module):
             )
 
             scaling = self.scaling(h)
-            learner_beta = integral_norm * scaling
+            learner_beta = (integral_norm * scaling) + self.epsilon
         return (
             1 - self.learner_weight
         ) * reference_beta + self.learner_weight * learner_beta
