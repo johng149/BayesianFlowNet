@@ -17,8 +17,8 @@ class ShakespeareDataset(Dataset):
         train: bool = True,
     ):
         assert (
-            folds >= 2
-        ), "loss variance estimation needs at least two folds to sample from"
+            folds >= 2 or not train
+        ), "loss variance estimation needs at least two folds to sample from when training"
         self.tokenizer = tokenizer
         self.max_length = max_length
         self.min_t = min_t

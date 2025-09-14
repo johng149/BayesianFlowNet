@@ -105,5 +105,6 @@ def bayesian_inference(
     # we need to do `(model_input + 1) / 2` to convert the input from [-1, 1] to [0, 1]
     # if we did not, the parameters of the distribution wouldn't produce a valid probability distribution
     # and so the `bayesian_update` may end up with NaN values
-    # however, upon returning, we need to convert it back to [-1, 1] as that is what the model is trained on
-    return bayesian_update(noisy_y, (model_input + 1) / 2) * 2 - 1
+    # however, upon returning, we need to convert it back to [-1, 1] as that is what the model is trained on,
+    # actually hold on, it looks like the model already does that internally? Let's try not converting it here
+    return bayesian_update(noisy_y, (model_input + 1) / 2)

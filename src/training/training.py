@@ -2,6 +2,7 @@ import torch
 from torch.nn import functional as F
 from tqdm.auto import tqdm
 
+from src.inference.discrete_inference import bayesian_inference, dis_t
 from src.nn.models.discrete_model import DiscreteModel
 from src.training.checkpoint import CheckpointManager
 from src.training.discrete_loss import divergence_loss, format_loss, loss, variance_loss
@@ -21,9 +22,11 @@ def train_discrete_model(
     folds: int,
     grad_clip_norm=None,
     save_every: int = 100,
+    test_dl=None,
+    test_every: int = 1000,
+    test_dl_inference_steps: int = 50,
     variance_loss_strength: float = 0.8,
     divergence_loss_strength: float = 0.8,
-    alpha_linearity_loss_strength: float = 0.2,
     skip_schedule_optim: bool = False,
 ):
     """
@@ -43,6 +46,8 @@ def train_discrete_model(
             `unique_x * folds`
         grad_clip_norm: Gradient clipping norm
         save_every: Save checkpoint every X epochs
+        test_dl: Test data loader
+        test_every: Run test loop every X epochs
         variance_loss_strength: Strength of the variance loss
         divergence_loss_strength: Strength of the divergence loss
     """
@@ -57,23 +62,25 @@ def train_discrete_model(
             desc="Training Discrete Model",
         )
         train_iter = iter(train_dl)
+        test_iter = iter(test_dl) if test_dl is not None else None
         for epoch in pbar:
             try:
-                ground_truth = next(train_iter)
+                sample = next(train_iter)
             except StopIteration:
                 train_iter = iter(train_dl)
-                ground_truth = next(train_iter)
-            x = ground_truth["x"]  # batch_size, seq_len, K
-            t = ground_truth["t"]
-            output, alpha = model.forward(x, t)
+                sample = next(train_iter)
+            enc = sample["encoder_input"]
+            targ = sample["target"]  # batch_size, seq_len, K
+            t = sample["t"]
+            output, alpha = model.forward(enc, targ, t)
             formatted_loss = format_loss(
-                alpha, x, model_output_logits=output, folds=folds
+                alpha, targ, model_output_logits=output, folds=folds
             )
             l_infty_loss = loss(formatted_loss)
             var_loss = variance_loss(formatted_loss) * variance_loss_strength
             # alpha_var_loss = alpha_variance_loss(alpha) * alpha_linearity_loss_strength
             div_loss = (
-                divergence_loss(x, model.learnable_beta, folds)
+                divergence_loss(targ, model.learnable_beta, folds)
                 * divergence_loss_strength
             )
             l = l_infty_loss + var_loss + div_loss  # + alpha_var_loss
@@ -101,7 +108,7 @@ def train_discrete_model(
                 # accelerator.backward(l)
 
                 # if we get here, then loss was fine and no NaN detected in gradients either
-                debug_data_past_epoch = debug_data_current_epoch
+                # debug_data_past_epoch = debug_data_current_epoch
 
             body_optimizer.zero_grad()
             schedule_optimizer.zero_grad()
@@ -118,12 +125,59 @@ def train_discrete_model(
                     "l_infty_loss": l_infty_loss.item(),
                     "var_loss": var_loss.item(),
                     "div_loss": div_loss.item(),
-                    # "alpha_var_loss": alpha_var_loss.item(),
-                    "beta_1": model.beta_1(x.shape[-1], device=accelerator.device),
+                    "beta_1": model.beta_1(targ.shape[-1], device=accelerator.device),
                 },
                 step=epoch,
             )
             pbar_description = f"Loss: {l.item():.4f}"
+
+            if (
+                test_dl is not None
+                and test_iter is not None
+                and epoch > 0
+                and epoch % test_every == 0
+            ):
+                model.eval()
+                with torch.no_grad():
+                    try:
+                        test_sample = next(test_iter)
+                    except StopIteration:
+                        test_iter = iter(test_dl)
+                        test_sample = next(test_iter)
+                    test_enc = test_sample["encoder_input"]
+                    test_targ = test_sample["target"]  # batch_size, seq_len, K
+                    model_input = test_targ
+                    test_t = test_sample["t"]
+                    total_it = (
+                        torch.ones_like(test_t, device=accelerator.device)
+                        * test_dl_inference_steps
+                    )
+                    for i in range(1, test_dl_inference_steps + 1):
+                        cur_it = torch.ones_like(test_t, device=accelerator.device) * i
+                        t = dis_t(cur_it, total_it).to(accelerator.device)
+                        test_output, _ = model.forward(
+                            test_enc, model_input, t, inference=True
+                        )
+                        model_input = bayesian_inference(
+                            model_input,
+                            test_output,
+                            cur_it,
+                            total_it,
+                            model.learnable_beta,
+                            test_targ.shape[-1],
+                        )
+                    # we calculate accuracy that model_input has against test_targ
+                    # for each batch, for each sequence position, we check if the argmax
+                    # of model_input matches the argmax of test_targ, then average over
+                    # the sequence length and batch size
+                    correct = (
+                        (model_input.argmax(dim=-1) == test_targ.argmax(dim=-1))
+                        .float()
+                        .mean()
+                    )
+                    accelerator.log({"test_accuracy": correct.item()}, step=epoch)
+                model.train()
+
             if epoch % save_every == 0:
                 pbar_description += " - Saving checkpoint"
                 pbar.set_description(pbar_description)

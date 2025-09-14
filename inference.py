@@ -1,4 +1,5 @@
 import os
+import random
 
 import torch
 from accelerate import Accelerator
@@ -6,7 +7,8 @@ from matplotlib import pyplot as plt
 from safetensors.torch import load_file
 from tqdm.auto import tqdm
 
-from src.datasets.discrete_helper import collate_fn
+from src.datasets.collate_fn import collate_fn_maker
+from src.datasets.shakespeare.shakespeare import ShakespeareDataset
 from src.inference.discrete_inference import bayesian_inference, dis_t
 from src.nn.layers.learnable_schedule import LearnableBetaScheduleNI
 from src.nn.models.discrete_model import DiscreteModel
@@ -16,7 +18,14 @@ from src.training.training import train_discrete_model
 
 accelerator = Accelerator(project_dir="./runs/shakespeare")
 tokenizer = Tokenizer()
-max_seq_len = 32
+max_seq_len = 128
+test_ds = ShakespeareDataset(
+    tokenizer=tokenizer, max_length=max_seq_len, folds=1, train=False
+)
+
+collate_fn = collate_fn_maker(
+    tokenizer=tokenizer, max_masks=3, min_masks=1, max_fill=0.95, min_fill=0.05
+)
 
 model_kwargs = {
     "max_seq_len": max_seq_len,
@@ -70,10 +79,12 @@ assert isinstance(schedule, LearnableBetaScheduleNI)
 quit_loop = False
 while not quit_loop:
     torch.manual_seed(0)
-    model_input = torch.normal(0, 1, (1, max_seq_len, tokenizer.vocab_size())).to(
-        accelerator.device
-    )
-    model_input = torch.softmax(model_input, dim=-1) * 2 - 1
+    sample_idx = random.randint(0, len(test_ds) - 1)
+    raw_sample = test_ds[sample_idx]
+    collated_sample = collate_fn([raw_sample])
+
+    enc = collated_sample["encoder_input"].to(accelerator.device)
+    model_input = collated_sample["target"].to(accelerator.device)
 
     try:
         n = int(input("Enter number of iterations (e.g., 100): "))
@@ -88,9 +99,7 @@ while not quit_loop:
         total_it = torch.tensor([n], device=accelerator.device)
         t = dis_t(cur_it, total_it).to(accelerator.device)
 
-        current_model_input = model_input.clone()
-
-        model_output, _ = model.forward(model_input, t)
+        model_output, _ = model.forward(enc, model_input, t)
         model_input = bayesian_inference(
             model_input,
             model_output,

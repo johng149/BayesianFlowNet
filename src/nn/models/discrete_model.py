@@ -18,10 +18,10 @@ class ModelBody(nn.Module):
         dropout: float = 0.1,
     ):
         super().__init__()
-        self.emb = nn.Parameter(torch.randn(K, hidden_dim))
+        self.emb = nn.Embedding(K, hidden_dim)
         self.pos_emb = nn.Parameter(torch.randn(max_seq_len, hidden_dim))
         self.time_vec = nn.Parameter(torch.randn(1, hidden_dim))
-        self.layers = nn.ModuleList(
+        self.enc_layers = nn.ModuleList(
             [
                 nn.TransformerEncoderLayer(
                     hidden_dim,
@@ -32,13 +32,30 @@ class ModelBody(nn.Module):
                     batch_first=True,
                     bias=False,
                 )
-                for i in range(layers)
+                for _ in range(layers)
+            ]
+        )
+        self.dec_layers = nn.ModuleList(
+            [
+                nn.TransformerDecoderLayer(
+                    hidden_dim,
+                    num_heads,
+                    hidden_dim * 4,
+                    dropout,
+                    activation=F.leaky_relu,
+                    batch_first=True,
+                    bias=False,
+                )
+                for _ in range(layers)
             ]
         )
         self.classifier = nn.Parameter(torch.randn(hidden_dim, K))
 
-    def token_emb(self, x):
-        return x @ self.emb
+    def x_token_emb(self, x):
+        return x @ self.emb.weight
+
+    def enc_token_emb(self, enc):
+        return self.emb(enc)
 
     def positional_emb(self, x):
         return x + self.pos_emb[: x.shape[1]]
@@ -51,12 +68,20 @@ class ModelBody(nn.Module):
         # (batch_size, seq_len, hidden_dim) so we need a second unsqueeze
         return (t.unsqueeze(-1) @ self.time_vec).unsqueeze(-2) + x
 
-    def forward(self, x, t):
-        x = self.token_emb(x)
+    def forward(self, enc, x, t):
+        # Encoder
+        enc_emb = self.enc_token_emb(enc)
+        enc_emb = self.positional_emb(enc_emb)
+        memory = enc_emb
+        for layer in self.enc_layers:
+            memory = layer(memory)
+
+        # Decoder
+        x = self.x_token_emb(x)
         x = self.positional_emb(x)
         x = self.time_emb(x, t)
-        for i, l in enumerate(self.layers):
-            x = l.forward(x)
+        for layer in self.dec_layers:
+            x = layer(x, memory)
         return x @ self.classifier
 
 
@@ -86,12 +111,16 @@ class DiscreteModel(nn.Module):
                 param.requires_grad = False
 
     def _init_weights(self):
-        xavier_uniform_(self.body.emb)
+        xavier_uniform_(self.body.emb.weight)
         xavier_uniform_(self.body.pos_emb)
         xavier_uniform_(self.body.time_vec)
         xavier_uniform_(self.body.classifier)
 
-        for layer in self.body.layers:
+        for layer in self.body.enc_layers:
+            for name, param in layer.named_parameters():
+                if "weight" in name and param.ndim > 1:
+                    xavier_uniform_(param)
+        for layer in self.body.dec_layers:
             for name, param in layer.named_parameters():
                 if "weight" in name and param.ndim > 1:
                     xavier_uniform_(param)
@@ -129,7 +158,7 @@ class DiscreteModel(nn.Module):
         return theta_tensor
 
     def token_emb(self, x):
-        return self.body.token_emb(x)
+        return self.body.x_token_emb(x)
 
     def positional_emb(self, x):
         return self.body.positional_emb(x)
@@ -137,7 +166,7 @@ class DiscreteModel(nn.Module):
     def time_emb(self, x, t):
         return self.body.time_emb(x, t)
 
-    def forward(self, x, t):
+    def forward(self, enc, x, t, inference: bool = False) -> tuple[Tensor, Tensor]:
         """
         At this point in time, `x` is still the ground truth tensor. The model will
         create the appropriate inputs as a function of this ground truth and the current
@@ -150,9 +179,11 @@ class DiscreteModel(nn.Module):
             The output logits of the model of shape (batch_size, seq_len, K).
         """
         batch_folds, seq_len, K = x.shape
-        beta, alpha = self.beta_and_alpha(
-            t, K
+        beta, alpha = (
+            self.beta_and_alpha(t, K)
+            if not inference
+            else (self.beta(t, K), torch.zeros_like(t))
         )  # Shape: (batch_size * folds,) for each tensor
         x = self.theta_input(x, t, beta)  # Shape: (batch_size * folds, seq_len, K)
-        x = self.body(x, t)
+        x = self.body(enc, x, t)
         return (x, alpha)
