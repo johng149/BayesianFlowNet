@@ -17,7 +17,7 @@ from src.training.training import train_discrete_model
 
 accelerator = Accelerator(log_with="tensorboard", project_dir="./runs")
 tokenizer = Tokenizer()
-max_seq_len = 128
+max_seq_len = 168
 batch_size = 64 * 2
 folds = 8
 effective_batch_size = batch_size // folds
@@ -52,8 +52,8 @@ model_kwargs = {
     "num_heads": 8,
     "layers": 5,
     # beta_1 from https://arxiv.org/html/2407.20294v2 equation 5
-    "reference_beta_1": (20.4054 / tokenizer.vocab_size()) ** 2,
-    "learner_weight": 0.0,
+    "reference_beta_1": 20.4054 / tokenizer.vocab_size(),
+    "learner_weight": 1.0,
     "freeze_body": False,
 }
 model = DiscreteModel(**model_kwargs)
@@ -63,7 +63,7 @@ num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
 print(f"Number of model parameters: {num_params}")
 
 grad_clip_norm = None
-skip_schedule_optim = True
+skip_schedule_optim = False
 
 optimizer_kwargs = {
     "body_optim_kwargs": {"lr": 1e-4},
@@ -88,10 +88,10 @@ metadata = CheckpointMetadata(
 )
 
 accelerator.init_trackers(
-    "shakespeare_byt5_sqrt",
+    "shakespeare_byt5_learnt",
 )
 
-checkpoint_dir = "./checkpoint/shakespeare_byt5_sqrt"
+checkpoint_dir = "./checkpoint/shakespeare_byt5_learnt"
 checkpoint_manager = CheckpointManager()
 checkpoint_manager.prepare(model, body_opt, schedule_opt, accelerator, metadata)
 checkpoint_manager.load(checkpoint_dir, error_if_not_exists=False)
