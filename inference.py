@@ -5,6 +5,7 @@ import torch
 from accelerate import Accelerator
 from matplotlib import pyplot as plt
 from safetensors.torch import load_file
+from torch.nn import functional as F
 from tqdm.auto import tqdm
 
 from src.datasets.collate_fn import collate_fn_maker
@@ -12,13 +13,13 @@ from src.datasets.shakespeare.shakespeare import ShakespeareDataset
 from src.inference.discrete_inference import bayesian_inference, dis_t
 from src.nn.layers.learnable_schedule import LearnableBetaScheduleNI
 from src.nn.models.discrete_model import DiscreteModel
-from src.tokenizers.ascii.ascii_tokenizer import ASCIITokenizer as Tokenizer
+from src.tokenizers.byt5.byt5_tokenizer import ByT5Tokenizer as Tokenizer
 from src.training.checkpoint import CheckpointManager, CheckpointMetadata
 from src.training.training import train_discrete_model
 
 accelerator = Accelerator(project_dir="./runs/shakespeare")
 tokenizer = Tokenizer()
-max_seq_len = 128
+max_seq_len = 168
 test_ds = ShakespeareDataset(
     tokenizer=tokenizer, max_length=max_seq_len, folds=1, train=False
 )
@@ -59,12 +60,12 @@ metadata = CheckpointMetadata(
     num_accelerators=accelerator.num_processes,
 )
 
-checkpoint_dir = "./checkpoint/shakespeare_ASCII_shannon"
+checkpoint_dir = "./checkpoint/shakespeare_byt5_baseline"
 checkpoint_manager = CheckpointManager()
 print("Preparing model...")
 checkpoint_manager.prepare(model, body_opt, schedule_opt, accelerator, metadata)
 print("Starting checkpoint loading process...")
-checkpoint_manager.load(checkpoint_dir, error_if_not_exists=False)
+checkpoint_manager.load(checkpoint_dir, error_if_not_exists=True)
 print("Finished loading checkpoint")
 
 model, opt = checkpoint_manager.model, checkpoint_manager.body_optimizer
@@ -85,6 +86,8 @@ while not quit_loop:
 
     enc = collated_sample["encoder_input"].to(accelerator.device)
     model_input = collated_sample["target"].to(accelerator.device)
+    expected = tokenizer.decode(model_input.squeeze(0), None)
+    expected_combined = tokenizer.decode(model_input.squeeze(0), enc.squeeze(0))
 
     try:
         n = int(input("Enter number of iterations (e.g., 100): "))
@@ -110,7 +113,13 @@ while not quit_loop:
         )
 
     tqdm.write("Final model result:")
-    tqdm.write(tokenizer.decode(model_input.squeeze(0)))
+    tqdm.write(f"Final model output: {tokenizer.decode(model_input.squeeze(0), None)}")
+    tqdm.write(f"Expected output: {expected}")
+    tqdm.write(
+        f"Encoder input: {tokenizer.decode(F.one_hot(enc.squeeze(0), num_classes=tokenizer.vocab_size()).float(), None)}"
+    )
+    tqdm.write(f"Combined: {tokenizer.decode(model_input.squeeze(0), enc.squeeze(0))}")
+    tqdm.write(f"Expected combined: {expected_combined}")
 
     user_input = input("Continue? (y/n): ")
     if user_input.lower() != "y":

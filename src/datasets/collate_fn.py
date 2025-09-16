@@ -18,6 +18,9 @@ def span_masking(original: Tensor, mask: Tensor, span_idx: int) -> Tensor:
     The `original` tensor and `mask` tensor must have the same shape
     and must be 1D tensors.
 
+    The `span_idx` must be different from any normal token value, which
+    means it cannot appear in `original` that is passed in
+
     @param original: The original tensor to mask
     @param mask: The mask tensor, where True values represent spans
     @param span_idx: The index to represent masked spans
@@ -32,7 +35,22 @@ def span_masking(original: Tensor, mask: Tensor, span_idx: int) -> Tensor:
     The `masked` tensor will be:
     torch.tensor([1, -1, 4, -1])
     """
+    assert not (original == span_idx).any(), "span_idx must not be in original tensor"
     original[mask] = span_idx
+
+    # this will collapse all consecutive span_idx values into a single value
+    # the logit is as follows:
+    # if the current value is the same as the previous value, we are either
+    # in a contiguous span or in a series of duplicate but non-span values
+    # if the current value is not the span_idx, then we are in a series of
+    # duplicate but non-span values. Since it is non-span values, we want to
+    # keep it.
+    # if the current value is not the same as the previous value, then even
+    # if current value is span_idx, we want to keep it since it is the start
+    # of a new span.
+    # however, this also means that the span_idx must be different from
+    # any normal token value, otherwise we would not be able to distinguish
+    # between a span and a series of duplicate but non-span values.
     prev = None
     elements = [prev := x for x in original if x != prev or x != span_idx]
     return torch.stack(elements)
@@ -215,7 +233,20 @@ def collate_fn(
         encs.append(enc)
         targs.append(targ)
 
-    encs = torch.stack(encs, dim=0)  # Shape: (batch_size, seq_len)
+    try:
+        encs = torch.stack(encs, dim=0)  # Shape: (batch_size, seq_len)
+    except RuntimeError as e:
+        print(f"Error stacking encoder inputs: {e}")
+        torch.save(
+            {
+                "x": x,
+                "mask": mask,
+                "encs": encs,
+                "targs": targs,
+            },
+            "collate_error_debug.pt",
+        )
+        raise e
 
     targs = [F.one_hot(tensor, num_classes=vocab_size).float() for tensor in targs]
     targs = torch.stack(targs, dim=0)  # Shape: (batch_size, seq_len, K)

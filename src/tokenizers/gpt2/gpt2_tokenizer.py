@@ -1,7 +1,9 @@
 import torch
 from torch import Tensor
-from src.tokenizers.base import TokenizerBase
 from transformers import AutoTokenizer
+
+from src.tokenizers.base import TokenizerBase
+
 
 class GPT2Tokenizer(TokenizerBase):
     def __init__(self):
@@ -10,12 +12,15 @@ class GPT2Tokenizer(TokenizerBase):
 
     def vocab_size(self) -> int:
         return self.tokenizer.vocab_size
-    
+
     def encode(self, text: str) -> Tensor:
         return self.tokenizer.encode(text, return_tensors="pt").squeeze(0)
-    
-    def decode(self, tokens: Tensor) -> str:
+
+    def decode(self, tokens: Tensor, enc_tokens: Tensor | None = None) -> str:
         assert tokens.ndim == 2, "tokens should be a 2D tensor of shape (seq_len, K)"
+        if enc_tokens is not None:
+            # TODO: implement this properly
+            raise NotImplementedError
         seq_len, K = tokens.shape
         cur_seq = []
         for i in range(seq_len):

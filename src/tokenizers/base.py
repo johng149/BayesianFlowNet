@@ -8,7 +8,7 @@ class TokenizerBase:
     def encode(self, text: str) -> Tensor:
         raise NotImplementedError("This method should be implemented by subclasses.")
 
-    def decode(self, tokens: Tensor) -> str:
+    def decode(self, tokens: Tensor, enc_tokens: Tensor | None = None) -> str:
         raise NotImplementedError("This method should be implemented by subclasses.")
 
     def enc_mask_token_id(self) -> int:

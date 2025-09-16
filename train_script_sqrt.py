@@ -17,7 +17,7 @@ from src.training.training import train_discrete_model
 
 accelerator = Accelerator(log_with="tensorboard", project_dir="./runs")
 tokenizer = Tokenizer()
-max_seq_len = 168
+max_seq_len = 128
 batch_size = 64 * 2
 folds = 8
 effective_batch_size = batch_size // folds
@@ -52,7 +52,7 @@ model_kwargs = {
     "num_heads": 8,
     "layers": 5,
     # beta_1 from https://arxiv.org/html/2407.20294v2 equation 5
-    "reference_beta_1": 20.4054 / tokenizer.vocab_size(),
+    "reference_beta_1": (20.4054 / tokenizer.vocab_size()) ** 2,
     "learner_weight": 0.0,
     "freeze_body": False,
 }
@@ -88,10 +88,10 @@ metadata = CheckpointMetadata(
 )
 
 accelerator.init_trackers(
-    "shakespeare_byt5_baseline",
+    "shakespeare_byt5_sqrt",
 )
 
-checkpoint_dir = "./checkpoint/shakespeare_byt5_baseline"
+checkpoint_dir = "./checkpoint/shakespeare_byt5_sqrt"
 checkpoint_manager = CheckpointManager()
 checkpoint_manager.prepare(model, body_opt, schedule_opt, accelerator, metadata)
 checkpoint_manager.load(checkpoint_dir, error_if_not_exists=False)
