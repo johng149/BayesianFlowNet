@@ -1,6 +1,6 @@
 [tool.pyright]
 typeCheckingMode = "standard"
-ignore = ["**/*.ipynb*", "**/__pycache__", "test"]
+ignore = ["**/*.ipynb*", "**/__pycache__", "test", ".venv"]
 
 [tool.pytest.ini_options]
 testpaths = ["test"]
