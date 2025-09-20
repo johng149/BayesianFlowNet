@@ -97,11 +97,14 @@ class DiscreteModel(nn.Module):
         dropout: float = 0.1,
         freeze_body: bool = False,
         learner_weight: float = 0.0,
+        fourier_schedule: bool = False,
     ):
         super().__init__()
         assert hidden_dim % num_heads == 0, "hidden_dim must be divisble by num_heads"
         self.learnable_beta = LearnableBetaScheduleNI(
-            reference_beta_1=reference_beta_1, learner_weight=learner_weight
+            reference_beta_1=reference_beta_1,
+            learner_weight=learner_weight,
+            fourier_schedule=fourier_schedule,
         )
         self.body = ModelBody(max_seq_len, K, hidden_dim, num_heads, layers, dropout)
         self._init_weights()

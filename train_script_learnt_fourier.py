@@ -55,6 +55,7 @@ model_kwargs = {
     "reference_beta_1": 20.4054 / tokenizer.vocab_size(),
     "learner_weight": 1.0,
     "freeze_body": False,
+    "fourier_schedule": True,
 }
 model = DiscreteModel(**model_kwargs)
 
@@ -67,7 +68,7 @@ skip_schedule_optim = False
 
 optimizer_kwargs = {
     "body_optim_kwargs": {"lr": 1e-4},
-    "schedule_optim_kwargs": {"lr": 1e-4},
+    "schedule_optim_kwargs": {"lr": 1e-5},
 }
 body_opt = torch.optim.Adam(
     model.body.parameters(),
@@ -88,10 +89,10 @@ metadata = CheckpointMetadata(
 )
 
 accelerator.init_trackers(
-    "shakespeare_byt5_learnt2",
+    "shakespeare_byt5_learnt_var2",
 )
 
-checkpoint_dir = "./checkpoint/shakespeare_byt5_learnt2"
+checkpoint_dir = "./checkpoint/shakespeare_byt5_learnt_var2"
 checkpoint_manager = CheckpointManager()
 checkpoint_manager.prepare(model, body_opt, schedule_opt, accelerator, metadata)
 checkpoint_manager.load(checkpoint_dir, error_if_not_exists=False)
@@ -128,9 +129,10 @@ train_discrete_model(
     test_every=4_000,
     test_dl=test_dl,
     test_dl_inference_steps=100,
-    variance_loss_strength=1.1,
-    divergence_loss_strength=0.8,
+    variance_loss_strength=0.7,
+    divergence_loss_strength=0.7,
     skip_schedule_optim=skip_schedule_optim,
+    pcgrad=False,
 )
 
 schedule = model.learnable_beta

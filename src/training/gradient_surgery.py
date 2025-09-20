@@ -69,7 +69,6 @@ def gradient_surgery(
     loss: Tensor,
     var_loss: Tensor,
     div_loss: Tensor,
-    # alpha_var_loss: Tensor,
     body: nn.Module,
     schedule: nn.Module,
     grad_clip_norm: float | None = None,
@@ -78,36 +77,39 @@ def gradient_surgery(
     body_optim.zero_grad(set_to_none=True)
     schedule_optim.zero_grad(set_to_none=True)
 
-    l = loss + var_loss + div_loss  # + alpha_var_loss
-    accelerator.backward(l)
+    l = loss + var_loss  # + div_loss
+
+    if skip_schedule_optim:
+        accelerator.backward(l)
+        if accelerator.sync_gradients and grad_clip_norm is not None:
+            accelerator.clip_grad_norm_(body.parameters(), grad_clip_norm)
+        body_optim.step()
+        return
+
+    grads, shapes, has_grads = [], [], []
+
+    accelerator.backward(div_loss, retain_graph=True)
+    div_grad, div_shape, div_has_grad = retrieve_grads(schedule_optim)
+    grads.append(flatten(div_grad))
+    has_grads.append(flatten(div_has_grad))
+    shapes.append(div_shape)
+
+    schedule_optim.zero_grad(set_to_none=True)
+
+    accelerator.backward(l, retain_graph=False)
+    if accelerator.sync_gradients and grad_clip_norm is not None:
+        accelerator.clip_grad_norm_(body.parameters(), grad_clip_norm)
     body_optim.step()
-    if not skip_schedule_optim:
-        schedule_optim.step()
 
-    # accelerator.backward(l, retain_graph=True)
-    # if accelerator.sync_gradients and grad_clip_norm is not None:
-    #     accelerator.clip_grad_norm_(body.parameters(), grad_clip_norm)
-    # body_optim.step()
+    l_grad, l_shape, l_has_grad = retrieve_grads(schedule_optim)
+    grads.append(flatten(l_grad))
+    has_grads.append(flatten(l_has_grad))
+    shapes.append(l_shape)
 
-    # grads, shapes, has_grads = [], [], []
+    projected = project_conflicting(grads, has_grads)
+    unflattened = unflatten(projected, shapes[0])
 
-    # l_grad, l_shape, l_has_grad = retrieve_grads(schedule_optim)
-    # grads.append(flatten(l_grad))
-    # has_grads.append(flatten(l_has_grad))
-    # shapes.append(l_shape)
-
-    # schedule_optim.zero_grad(set_to_none=True)
-    # accelerator.backward(div_loss, retain_graph=True)
-
-    # div_grad, div_shape, div_has_grad = retrieve_grads(schedule_optim)
-    # grads.append(flatten(div_grad))
-    # has_grads.append(flatten(div_has_grad))
-    # shapes.append(div_shape)
-
-    # projected = project_conflicting(grads, has_grads)
-    # unflattened = unflatten(projected, shapes[0])
-
-    # set_grad(unflattened, schedule_optim)
-    # if accelerator.sync_gradients and grad_clip_norm is not None:
-    #     accelerator.clip_grad_norm_(schedule.parameters(), grad_clip_norm)
-    # schedule_optim.step()
+    set_grad(unflattened, schedule_optim)
+    if accelerator.sync_gradients and grad_clip_norm is not None:
+        accelerator.clip_grad_norm_(schedule.parameters(), grad_clip_norm)
+    schedule_optim.step()

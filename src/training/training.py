@@ -28,6 +28,7 @@ def train_discrete_model(
     variance_loss_strength: float = 0.8,
     divergence_loss_strength: float = 0.8,
     skip_schedule_optim: bool = False,
+    pcgrad: bool = False,
 ):
     """
     Args:
@@ -110,14 +111,28 @@ def train_discrete_model(
                 # if we get here, then loss was fine and no NaN detected in gradients either
                 # debug_data_past_epoch = debug_data_current_epoch
 
-            body_optimizer.zero_grad()
-            schedule_optimizer.zero_grad()
-            accelerator.backward(l)
-            if accelerator.sync_gradients and grad_clip_norm is not None:
-                accelerator.clip_grad_norm_(model.parameters(), grad_clip_norm)
-            body_optimizer.step()
-            if not skip_schedule_optim:
-                schedule_optimizer.step()
+            if not pcgrad:
+                body_optimizer.zero_grad()
+                schedule_optimizer.zero_grad()
+                accelerator.backward(l)
+                if accelerator.sync_gradients and grad_clip_norm is not None:
+                    accelerator.clip_grad_norm_(model.parameters(), grad_clip_norm)
+                body_optimizer.step()
+                if not skip_schedule_optim:
+                    schedule_optimizer.step()
+            else:
+                gradient_surgery(
+                    accelerator=accelerator,
+                    body_optim=body_optimizer,
+                    schedule_optim=schedule_optimizer,
+                    loss=l_infty_loss,
+                    var_loss=var_loss,
+                    div_loss=div_loss,
+                    body=model.body,
+                    schedule=model.learnable_beta,
+                    grad_clip_norm=grad_clip_norm,
+                    skip_schedule_optim=skip_schedule_optim,
+                )
 
             accelerator.log(
                 {

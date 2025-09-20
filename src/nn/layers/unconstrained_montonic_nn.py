@@ -205,24 +205,80 @@ class MonotonicLinear(nn.Linear):
         return x_pos + x_neg
 
 
-class IntegrandNN_PE(nn.Module):
-    def __init__(self, in_d, hidden_layers, encoding_dim=32):
+class PositionalEncodingFourier(nn.Module):
+    def __init__(self, encoding_dim: int):
         super().__init__()
-        self.pos_encoder = PositionalEncoding(encoding_dim)
+        self.encoding_dim = encoding_dim
+
+        # Create the division term for the sinusoidal functions.
+        # This is a constant, so we register it as a buffer.
+        # The shape is (encoding_dim // 2).
+        div_term = torch.exp(
+            torch.arange(0, encoding_dim, 2).float()
+            * (-math.log(10000.0) / encoding_dim)
+        )
+        self.register_buffer("div_term", div_term)
+
+    def forward(self, t: Tensor) -> Tensor:
+        """
+        Args:
+            t: A tensor of shape (batch_size, 1) representing time.
+        Returns:
+            A tensor of shape (batch_size, encoding_dim + 1) with positional encodings.
+        """
+        # Create the sinusoidal encodings
+        # pe will have shape (batch_size, encoding_dim)
+        pe = torch.zeros(t.shape[0], self.encoding_dim, device=t.device)
+        pe[:, 0::2] = torch.sin(
+            t * self.div_term  # pyright: ignore[reportOperatorIssue]
+        )
+        pe[:, 1::2] = torch.cos(
+            t * self.div_term  # pyright: ignore[reportOperatorIssue]
+        )
+
+        # Concatenate the original time 't' with its encoding.
+        # This gives the network access to both the raw time and its non-linear features.
+        return torch.cat([t, pe], dim=1)
+
+
+class IntegrandNN_PE(nn.Module):
+    def __init__(self, in_d, hidden_layers, encoding_dim=32, use_fourier=False):
+        super().__init__()
+        self.pos_encoder = (
+            PositionalEncoding(encoding_dim)
+            if not use_fourier
+            else PositionalEncodingFourier(encoding_dim)
+        )
 
         # The input to our network is the encoded time + the conditioning variables.
         # Encoded time has dimension: encoding_dim + 1 (for the original t)
         # Conditioning variables have dimension: in_d - 1 (since in_d includes time)
         net_input_dim = (encoding_dim + 1) + (in_d - 1)
 
-        self.net_layers = []
-        hs = [net_input_dim] + hidden_layers + [1]
-        i = 0
-        for h0, h1 in zip(hs, hs[1:]):
-            activation = nn.Identity() if i == 0 else nn.ReLU()
-            self.net_layers.extend([MonotonicLinear(h0, h1, pre_activation=activation)])
-            i += 1
-        self.net = nn.Sequential(*self.net_layers)
+        if not use_fourier:
+            self.net_layers = []
+            hs = [net_input_dim] + hidden_layers + [1]
+            i = 0
+            for h0, h1 in zip(hs, hs[1:]):
+                activation = nn.Identity() if i == 0 else nn.ReLU()
+                self.net_layers.extend(
+                    [MonotonicLinear(h0, h1, pre_activation=activation)]
+                )
+                i += 1
+            self.net = nn.Sequential(*self.net_layers)
+        else:
+            self.net_layers = []
+            hs = [net_input_dim] + hidden_layers + [1]
+            for h0, h1 in zip(hs, hs[1:]):
+                self.net_layers.extend(
+                    [
+                        nn.Linear(h0, h1),
+                        nn.ReLU(),
+                    ]
+                )
+            self.net_layers.pop()
+            # self.net.append(nn.ELU()) we just take exp of model output instead
+            self.net = nn.Sequential(*self.net_layers)
 
     def forward(self, t, h):
         """
@@ -252,6 +308,7 @@ class MonotonicNN(nn.Module):
         encoding_dim=32,
         learner_weight=0.0,
         epsilon: float = 1e-8,
+        fourier_schedule: bool = False,
     ):
         super().__init__()
         # The MonotonicNN takes the variable to be integrated over (dim 1)
@@ -264,7 +321,9 @@ class MonotonicNN(nn.Module):
         # train this schedule, with learner weight = 1.0
         self.learner_weight = learner_weight
         self.beta_1 = beta_1
-        self.integrand = IntegrandNN_PE(in_d, hidden_layers, encoding_dim=encoding_dim)
+        self.integrand = IntegrandNN_PE(
+            in_d, hidden_layers, encoding_dim=encoding_dim, use_fourier=fourier_schedule
+        )
         self.net_layers = []
         hs = [in_d - 1] + hidden_layers + [1]
         for h0, h1 in zip(hs, hs[1:]):
