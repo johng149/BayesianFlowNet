@@ -266,6 +266,12 @@ class IntegrandNN_PE(nn.Module):
                 )
                 i += 1
             self.net = nn.Sequential(*self.net_layers)
+            # make every weight in self.net zero
+            for layer in self.net_layers:
+                if isinstance(layer, MonotonicLinear):
+                    nn.init.constant_(layer.weight, 0.0)
+                    if layer.bias is not None:
+                        nn.init.constant_(layer.bias, 0.0)
         else:
             self.net_layers = []
             hs = [net_input_dim] + hidden_layers + [1]

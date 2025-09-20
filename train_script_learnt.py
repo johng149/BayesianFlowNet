@@ -67,7 +67,7 @@ skip_schedule_optim = False
 
 optimizer_kwargs = {
     "body_optim_kwargs": {"lr": 1e-4},
-    "schedule_optim_kwargs": {"lr": 1e-4},
+    "schedule_optim_kwargs": {"lr": 5e-5},
 }
 body_opt = torch.optim.Adam(
     model.body.parameters(),
@@ -128,8 +128,8 @@ train_discrete_model(
     test_every=4_000,
     test_dl=test_dl,
     test_dl_inference_steps=100,
-    variance_loss_strength=1.1,
-    divergence_loss_strength=0.8,
+    variance_loss_strength=0.8,
+    divergence_loss_strength=0.6,
     skip_schedule_optim=skip_schedule_optim,
 )
 
