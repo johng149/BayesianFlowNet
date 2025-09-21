@@ -34,10 +34,11 @@ class LearnableBetaScheduleNI(nn.Module):
             fourier_schedule=fourier_schedule,
         )
 
-    def beta_1(self, K: int, device) -> float:
+    def beta_1(self, K: int, device: str, learner_weight: float | None = None) -> float:
         return self.monotonic_nn(
             torch.tensor([[1.0]], device=device),
             torch.tensor([[1.0]], device=device) * K,
+            learner_weight=learner_weight,
         ).item()
 
     def scaling(self, K: int, device) -> float:
@@ -55,7 +56,7 @@ class LearnableBetaScheduleNI(nn.Module):
         h = torch.tensor([[1.0]], device=device) * K
         return self.monotonic_nn.scaling(h).item()
 
-    def forward(self, t: Tensor, K: int) -> Tensor:
+    def forward(self, t: Tensor, K: int, learner_weight: float | None = None) -> Tensor:
         """
         Args:
             t: A tensor of time steps of shape (batch_size,).
@@ -71,19 +72,23 @@ class LearnableBetaScheduleNI(nn.Module):
         h = torch.ones_like(t_reshaped, device=t.device) * K
 
         # 1. Compute the monotonic function F(t) = integral from 0 to t
-        integral_t = self.monotonic_nn(t_reshaped, h).squeeze(-1)
+        integral_t = self.monotonic_nn(t_reshaped, h, learner_weight).squeeze(-1)
 
         return integral_t
 
     def get_alpha(
-        self, t: Tensor, K: int, epsilon: float = 1e-8
+        self,
+        t: Tensor,
+        K: int,
+        epsilon: float = 1e-8,
+        learner_weight: float | None = None,
     ) -> tuple[Tensor, Tensor]:
         """
         Calculates alpha = d(beta)/dt.
         This is efficient as it doesn't require backpropagation through the integral.
         """
         t.requires_grad_(True)
-        beta = self.forward(t, K)
+        beta = self.forward(t, K, learner_weight)
 
         alpha = torch.autograd.grad(
             outputs=beta,

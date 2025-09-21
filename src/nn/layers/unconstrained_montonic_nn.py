@@ -346,10 +346,11 @@ class MonotonicNN(nn.Module):
 
         self.epsilon = epsilon
 
-    def forward(self, x, h):
+    def forward(self, x, h, learner_weight: float | None = None):
         learner_beta = 0.0
         reference_beta = self.beta_1 * (x**2)
-        if self.learner_weight > 0.0:
+        lw = learner_weight if learner_weight is not None else self.learner_weight
+        if lw > 0.0:
             # `x` is the variable of integration, `h` is conditioning
             x0 = torch.zeros_like(x)
 
@@ -372,9 +373,7 @@ class MonotonicNN(nn.Module):
 
             scaling = self.scaling(h)
             learner_beta = (integral_norm * scaling) + self.epsilon
-        return (
-            1 - self.learner_weight
-        ) * reference_beta + self.learner_weight * learner_beta
+        return (1 - lw) * reference_beta + lw * learner_beta
 
     def scaling(self, h):
         # This method returns the scaling factor for the input `h`, maybe useful for debugging

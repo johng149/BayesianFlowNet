@@ -13,7 +13,13 @@ def dis_t(i: Tensor, n: Tensor, minimum: float = 1e-6):
     return torch.clamp((i - 1) / n, min=minimum)
 
 
-def accuracy(i: Tensor, n: Tensor, K: int, schedule: LearnableBetaScheduleNI) -> Tensor:
+def accuracy(
+    i: Tensor,
+    n: Tensor,
+    K: int,
+    schedule: LearnableBetaScheduleNI,
+    learner_weight: float | None = None,
+) -> Tensor:
     """
     Args:
         i: Current iteration number of shape (batch_size,).
@@ -30,7 +36,7 @@ def accuracy(i: Tensor, n: Tensor, K: int, schedule: LearnableBetaScheduleNI) ->
     ), "Current iteration must be less than or equal to total iterations"
 
     t = i / n
-    return schedule.forward(t, K)
+    return schedule.forward(t, K, learner_weight=learner_weight)
 
 
 def sample_model_output(model_output_logits: Tensor) -> Tensor:
@@ -86,6 +92,7 @@ def bayesian_inference(
     n: Tensor,
     schedule: LearnableBetaScheduleNI,
     K: int,
+    learner_weight: float | None = None,
 ) -> Tensor:
     """
     Args:
@@ -98,7 +105,7 @@ def bayesian_inference(
     Returns:
         Resulting tensor after performing Bayesian inference.
     """
-    acc = accuracy(i, n, K, schedule)
+    acc = accuracy(i, n, K, schedule, learner_weight=learner_weight)
     sampled = sample_model_output(model_output_logits)
     noisy_y = y(sampled, acc)
 

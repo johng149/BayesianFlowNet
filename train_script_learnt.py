@@ -62,12 +62,12 @@ model = DiscreteModel(**model_kwargs)
 num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
 print(f"Number of model parameters: {num_params}")
 
-grad_clip_norm = None
+grad_clip_norm = 1.0
 skip_schedule_optim = False
 
 optimizer_kwargs = {
     "body_optim_kwargs": {"lr": 1e-4},
-    "schedule_optim_kwargs": {"lr": 5e-5},
+    "schedule_optim_kwargs": {"lr": 1e-6},
 }
 body_opt = torch.optim.Adam(
     model.body.parameters(),
@@ -88,10 +88,10 @@ metadata = CheckpointMetadata(
 )
 
 accelerator.init_trackers(
-    "shakespeare_byt5_learnt2",
+    "shakespeare_byt5_learnt_shift",
 )
 
-checkpoint_dir = "./checkpoint/shakespeare_byt5_learnt2"
+checkpoint_dir = "./checkpoint/shakespeare_byt5_learnt_shift"
 checkpoint_manager = CheckpointManager()
 checkpoint_manager.prepare(model, body_opt, schedule_opt, accelerator, metadata)
 checkpoint_manager.load(checkpoint_dir, error_if_not_exists=False)
@@ -112,6 +112,8 @@ assert isinstance(model, DiscreteModel)
 
 epochs = 1_300_000
 
+learner_weight_threshold = 300_000
+
 train_discrete_model(
     model,
     body_opt,
@@ -131,6 +133,7 @@ train_discrete_model(
     variance_loss_strength=0.8,
     divergence_loss_strength=0.6,
     skip_schedule_optim=skip_schedule_optim,
+    learner_weight_threshold=learner_weight_threshold,
 )
 
 schedule = model.learnable_beta

@@ -128,19 +128,23 @@ class DiscreteModel(nn.Module):
                 if "weight" in name and param.ndim > 1:
                     xavier_uniform_(param)
 
-    def beta_1(self, K: int, device: str) -> float:
-        return self.learnable_beta.beta_1(K, device)
+    def beta_1(self, K: int, device: str, learner_weight: float | None = None) -> float:
+        return self.learnable_beta.beta_1(K, device, learner_weight=learner_weight)
 
     def scaling(self, K: int, device: str) -> float:
         return self.learnable_beta.scaling(K, device)
 
-    def beta(self, t: Tensor, K: int) -> Tensor:
-        return self.learnable_beta(t, K)
+    def beta(self, t: Tensor, K: int, learner_weight: float | None = None) -> Tensor:
+        return self.learnable_beta(t, K, learner_weight=learner_weight)
 
     def beta_and_alpha(
-        self, t: Tensor, K: int, epsilon: float = 1e-8
+        self,
+        t: Tensor,
+        K: int,
+        epsilon: float = 1e-8,
+        learner_weight: float | None = None,
     ) -> tuple[Tensor, Tensor]:
-        return self.learnable_beta.get_alpha(t, K, epsilon)
+        return self.learnable_beta.get_alpha(t, K, epsilon, learner_weight)
 
     def theta_input(self, x: Tensor, t: Tensor, beta: Tensor) -> Tensor:
         """
@@ -169,7 +173,9 @@ class DiscreteModel(nn.Module):
     def time_emb(self, x, t):
         return self.body.time_emb(x, t)
 
-    def forward(self, enc, x, t, inference: bool = False) -> tuple[Tensor, Tensor]:
+    def forward(
+        self, enc, x, t, inference: bool = False, learner_weight: float | None = None
+    ) -> tuple[Tensor, Tensor]:
         """
         At this point in time, `x` is still the ground truth tensor. The model will
         create the appropriate inputs as a function of this ground truth and the current
@@ -183,9 +189,9 @@ class DiscreteModel(nn.Module):
         """
         batch_folds, seq_len, K = x.shape
         beta, alpha = (
-            self.beta_and_alpha(t, K)
+            self.beta_and_alpha(t, K, learner_weight=learner_weight)
             if not inference
-            else (self.beta(t, K), torch.zeros_like(t))
+            else (self.beta(t, K, learner_weight=learner_weight), torch.zeros_like(t))
         )  # Shape: (batch_size * folds,) for each tensor
         x = self.theta_input(x, t, beta)  # Shape: (batch_size * folds, seq_len, K)
         x = self.body(enc, x, t)

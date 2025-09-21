@@ -29,6 +29,7 @@ def train_discrete_model(
     divergence_loss_strength: float = 0.8,
     skip_schedule_optim: bool = False,
     pcgrad: bool = False,
+    learner_weight_threshold: int | None = None,
 ):
     """
     Args:
@@ -70,10 +71,15 @@ def train_discrete_model(
             except StopIteration:
                 train_iter = iter(train_dl)
                 sample = next(train_iter)
+            lw = (
+                None
+                if learner_weight_threshold is None
+                else min(1.0, epoch / learner_weight_threshold)
+            )
             enc = sample["encoder_input"]
             targ = sample["target"]  # batch_size, seq_len, K
             t = sample["t"]
-            output, alpha = model.forward(enc, targ, t)
+            output, alpha = model.forward(enc, targ, t, learner_weight=lw)
             formatted_loss = format_loss(
                 alpha, targ, model_output_logits=output, folds=folds
             )
@@ -140,7 +146,9 @@ def train_discrete_model(
                     "l_infty_loss": l_infty_loss.item(),
                     "var_loss": var_loss.item(),
                     "div_loss": div_loss.item(),
-                    "beta_1": model.beta_1(targ.shape[-1], device=accelerator.device),
+                    "beta_1": model.beta_1(
+                        targ.shape[-1], device=accelerator.device, learner_weight=lw
+                    ),
                 },
                 step=epoch,
             )
@@ -171,7 +179,7 @@ def train_discrete_model(
                         cur_it = torch.ones_like(test_t, device=accelerator.device) * i
                         t = dis_t(cur_it, total_it).to(accelerator.device)
                         test_output, _ = model.forward(
-                            test_enc, model_input, t, inference=True
+                            test_enc, model_input, t, inference=True, learner_weight=lw
                         )
                         model_input = bayesian_inference(
                             model_input,
@@ -180,6 +188,7 @@ def train_discrete_model(
                             total_it,
                             model.learnable_beta,
                             test_targ.shape[-1],
+                            learner_weight=lw,
                         )
                     # we calculate accuracy that model_input has against test_targ
                     # for each batch, for each sequence position, we check if the argmax
