@@ -87,7 +87,7 @@ def train_discrete_model(
             var_loss = variance_loss(formatted_loss) * variance_loss_strength
             # alpha_var_loss = alpha_variance_loss(alpha) * alpha_linearity_loss_strength
             div_loss = (
-                divergence_loss(targ, model.learnable_beta, folds)
+                divergence_loss(targ, model.learnable_beta, folds, learner_weight=lw)
                 * divergence_loss_strength
             )
             l = l_infty_loss + var_loss + div_loss  # + alpha_var_loss

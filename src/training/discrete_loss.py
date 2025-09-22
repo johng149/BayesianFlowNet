@@ -80,7 +80,11 @@ def variance_loss(
 
 
 def divergence_loss(
-    x: Tensor, schedule: LearnableBetaScheduleNI, folds: int, samples: int = 64
+    x: Tensor,
+    schedule: LearnableBetaScheduleNI,
+    folds: int,
+    samples: int = 64,
+    learner_weight: float | None = None,
 ) -> Tensor:
     """
     Divergence loss is a regularization term that is intended to help train
@@ -122,7 +126,7 @@ def divergence_loss(
     # for each `x`, sample `folds` timesteps
     t = torch.rand(batch_folds, device=x.device)
 
-    beta_t = schedule.forward(t, K)
+    beta_t = schedule.forward(t, K, learner_weight=learner_weight)
 
     beta_t = einops.repeat(
         beta_t,
