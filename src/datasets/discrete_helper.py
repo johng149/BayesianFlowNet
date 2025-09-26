@@ -5,7 +5,7 @@ from torch.nn import functional as F
 
 def y_distribution(
     beta: Tensor, K: int, kron_x: Tensor, deterministic: bool = False
-) -> Tensor:
+) -> tuple[Tensor, Tensor | float]:
     """
     Args:
         beta: Tensor of accuracy values for each batch of shape (batch_size,).
@@ -26,7 +26,7 @@ def y_distribution(
         if not deterministic
         else 0.0
     )
-    return mean + (variance**0.5) * epsilon
+    return mean + (variance**0.5) * epsilon, epsilon
 
 
 def theta(y: Tensor):

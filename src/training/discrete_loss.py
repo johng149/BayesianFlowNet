@@ -140,7 +140,8 @@ def divergence_loss(
         samples=samples,
     )
 
-    logits = y_distribution(beta_t, K, x)
+    logits, eps = y_distribution(beta_t, K, x)
+    torch.save(eps, "debug_div_eps.pt")
     cat = Categorical(logits=logits)
 
     entropy = cat.entropy()  # should be shape (batch_size * folds * samples, seq_len)

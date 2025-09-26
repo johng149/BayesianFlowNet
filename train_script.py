@@ -15,9 +15,9 @@ from src.tokenizers.byt5.byt5_tokenizer import ByT5Tokenizer as Tokenizer
 from src.training.checkpoint import CheckpointManager, CheckpointMetadata
 from src.training.training import train_discrete_model
 
-accelerator = Accelerator(log_with="tensorboard", project_dir="./runs")
+accelerator = Accelerator(log_with="tensorboard", project_dir="./runs_small")
 tokenizer = Tokenizer()
-max_seq_len = 168
+max_seq_len = 56
 batch_size = 64 * 2
 folds = 8
 effective_batch_size = batch_size // folds
@@ -50,7 +50,7 @@ model_kwargs = {
     "K": tokenizer.vocab_size(),
     "hidden_dim": 512,
     "num_heads": 8,
-    "layers": 5,
+    "layers": 2,
     # beta_1 from https://arxiv.org/html/2407.20294v2 equation 5
     "reference_beta_1": 20.4054 / tokenizer.vocab_size(),
     "learner_weight": 0.0,
@@ -88,10 +88,10 @@ metadata = CheckpointMetadata(
 )
 
 accelerator.init_trackers(
-    "shakespeare_byt5_baseline",
+    "shakespeare_byt5_small_baseline",
 )
 
-checkpoint_dir = "./checkpoint/shakespeare_byt5_baseline"
+checkpoint_dir = "./checkpoint/shakespeare_byt5_small_baseline"
 checkpoint_manager = CheckpointManager()
 checkpoint_manager.prepare(model, body_opt, schedule_opt, accelerator, metadata)
 checkpoint_manager.load(checkpoint_dir, error_if_not_exists=False)

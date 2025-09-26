@@ -53,164 +53,182 @@ def train_discrete_model(
         divergence_loss_strength: Strength of the divergence loss
     """
     epoch = starting_epoch
-    # debug_data_past_epoch = {}
-    # debug_data_current_epoch = {}
-    # with torch.autograd.detect_anomaly():
-    try:
-        model.train()
-        pbar = tqdm(
-            range(starting_epoch, starting_epoch + epochs),
-            desc="Training Discrete Model",
-        )
-        train_iter = iter(train_dl)
-        test_iter = iter(test_dl) if test_dl is not None else None
-        for epoch in pbar:
-            try:
-                sample = next(train_iter)
-            except StopIteration:
-                train_iter = iter(train_dl)
-                sample = next(train_iter)
-            enc = sample["encoder_input"]
-            targ = sample["target"]  # batch_size, seq_len, K
-            t = sample["t"]
-            output, alpha = model.forward(enc, targ, t)
-            formatted_loss = format_loss(
-                alpha, targ, model_output_logits=output, folds=folds
+    debug_data_past_epoch = {}
+    debug_data_current_epoch = {}
+    with torch.autograd.detect_anomaly():
+        try:
+            model.train()
+            pbar = tqdm(
+                range(starting_epoch, starting_epoch + epochs),
+                desc="Training Discrete Model",
             )
-            l_infty_loss = loss(formatted_loss)
-            var_loss = variance_loss(formatted_loss) * variance_loss_strength
-            # alpha_var_loss = alpha_variance_loss(alpha) * alpha_linearity_loss_strength
-            div_loss = (
-                divergence_loss(targ, model.learnable_beta, folds)
-                * divergence_loss_strength
-            )
-            l = l_infty_loss + var_loss + div_loss  # + alpha_var_loss
-            # debug_data_current_epoch = {
-            #     "x": x,
-            #     "t": t,
-            #     "output": output,
-            #     "alpha": alpha,
-            #     "formatted_loss": formatted_loss,
-            #     "l_infty_loss": l_infty_loss,
-            #     "var_loss": var_loss,
-            #     "div_loss": div_loss,
-            #     "l": l,
-            #     "model_state_dict": model.state_dict(),
-            # }
+            train_iter = iter(train_dl)
+            test_iter = iter(test_dl) if test_dl is not None else None
+            for epoch in pbar:
+                try:
+                    sample = next(train_iter)
+                except StopIteration:
+                    train_iter = iter(train_dl)
+                    sample = next(train_iter)
+                enc = sample["encoder_input"]
+                targ = sample["target"]  # batch_size, seq_len, K
+                t = sample["t"]
+                debug_data_current_epoch = {
+                    "enc": enc,
+                    "targ": targ,
+                    "t": t,
+                    "model_state_dict": model.state_dict(),
+                }
+                output, alpha = model.forward(enc, targ, t)
+                formatted_loss = format_loss(
+                    alpha, targ, model_output_logits=output, folds=folds
+                )
+                l_infty_loss = loss(formatted_loss)
+                var_loss = variance_loss(formatted_loss) * variance_loss_strength
+                # alpha_var_loss = alpha_variance_loss(alpha) * alpha_linearity_loss_strength
+                div_loss = (
+                    divergence_loss(targ, model.learnable_beta, folds)
+                    * divergence_loss_strength
+                )
+                l = l_infty_loss + var_loss + div_loss  # + alpha_var_loss
+                # debug_data_current_epoch = {
+                #     "enc": enc,
+                #     "targ": targ,
+                #     "t": t,
+                #     "output": output,
+                #     "alpha": alpha,
+                #     "formatted_loss": formatted_loss,
+                #     "l_infty_loss": l_infty_loss,
+                #     "var_loss": var_loss,
+                #     "div_loss": div_loss,
+                #     "l": l,
+                #     "model_state_dict": model.state_dict(),
+                # }
+                debug_data_current_epoch["output"] = output
+                debug_data_current_epoch["alpha"] = alpha
+                debug_data_current_epoch["formatted_loss"] = formatted_loss
+                debug_data_current_epoch["l_infty_loss"] = l_infty_loss
+                debug_data_current_epoch["var_loss"] = var_loss
+                debug_data_current_epoch["div_loss"] = div_loss
+                debug_data_current_epoch["l"] = l
 
-            if (
-                l_infty_loss.isnan().any()
-                or var_loss.isnan().any()
-                or div_loss.isnan().any()
-            ):
-                raise RuntimeError("NaN detected in loss components")
+                if (
+                    l_infty_loss.isnan().any()
+                    or var_loss.isnan().any()
+                    or div_loss.isnan().any()
+                ):
+                    raise RuntimeError("NaN detected in loss components")
 
-                # optimizer.zero_grad()
-                # accelerator.backward(l)
+                    # optimizer.zero_grad()
+                    # accelerator.backward(l)
 
                 # if we get here, then loss was fine and no NaN detected in gradients either
-                # debug_data_past_epoch = debug_data_current_epoch
+                debug_data_past_epoch = debug_data_current_epoch
 
-            if not pcgrad:
-                body_optimizer.zero_grad()
-                schedule_optimizer.zero_grad()
-                accelerator.backward(l)
-                if accelerator.sync_gradients and grad_clip_norm is not None:
-                    accelerator.clip_grad_norm_(model.parameters(), grad_clip_norm)
-                body_optimizer.step()
-                if not skip_schedule_optim:
-                    schedule_optimizer.step()
-            else:
-                gradient_surgery(
-                    accelerator=accelerator,
-                    body_optim=body_optimizer,
-                    schedule_optim=schedule_optimizer,
-                    loss=l_infty_loss,
-                    var_loss=var_loss,
-                    div_loss=div_loss,
-                    body=model.body,
-                    schedule=model.learnable_beta,
-                    grad_clip_norm=grad_clip_norm,
-                    skip_schedule_optim=skip_schedule_optim,
+                if not pcgrad:
+                    body_optimizer.zero_grad()
+                    schedule_optimizer.zero_grad()
+                    accelerator.backward(l)
+                    if accelerator.sync_gradients and grad_clip_norm is not None:
+                        accelerator.clip_grad_norm_(model.parameters(), grad_clip_norm)
+                    body_optimizer.step()
+                    if not skip_schedule_optim:
+                        schedule_optimizer.step()
+                else:
+                    gradient_surgery(
+                        accelerator=accelerator,
+                        body_optim=body_optimizer,
+                        schedule_optim=schedule_optimizer,
+                        loss=l_infty_loss,
+                        var_loss=var_loss,
+                        div_loss=div_loss,
+                        body=model.body,
+                        schedule=model.learnable_beta,
+                        grad_clip_norm=grad_clip_norm,
+                        skip_schedule_optim=skip_schedule_optim,
+                    )
+
+                accelerator.log(
+                    {
+                        "loss": l.item(),
+                        "l_infty_loss": l_infty_loss.item(),
+                        "var_loss": var_loss.item(),
+                        "div_loss": div_loss.item(),
+                        "beta_1": model.beta_1(
+                            targ.shape[-1], device=accelerator.device
+                        ),
+                    },
+                    step=epoch,
                 )
+                pbar_description = f"Loss: {l.item():.4f}"
 
-            accelerator.log(
-                {
-                    "loss": l.item(),
-                    "l_infty_loss": l_infty_loss.item(),
-                    "var_loss": var_loss.item(),
-                    "div_loss": div_loss.item(),
-                    "beta_1": model.beta_1(targ.shape[-1], device=accelerator.device),
-                },
-                step=epoch,
-            )
-            pbar_description = f"Loss: {l.item():.4f}"
-
-            if (
-                test_dl is not None
-                and test_iter is not None
-                and epoch > 0
-                and epoch % test_every == 0
-            ):
-                model.eval()
-                with torch.no_grad():
-                    try:
-                        test_sample = next(test_iter)
-                    except StopIteration:
-                        test_iter = iter(test_dl)
-                        test_sample = next(test_iter)
-                    test_enc = test_sample["encoder_input"]
-                    test_targ = test_sample["target"]  # batch_size, seq_len, K
-                    model_input = test_targ
-                    test_t = test_sample["t"]
-                    total_it = (
-                        torch.ones_like(test_t, device=accelerator.device)
-                        * test_dl_inference_steps
-                    )
-                    for i in range(1, test_dl_inference_steps + 1):
-                        cur_it = torch.ones_like(test_t, device=accelerator.device) * i
-                        t = dis_t(cur_it, total_it).to(accelerator.device)
-                        test_output, _ = model.forward(
-                            test_enc, model_input, t, inference=True
+                if (
+                    test_dl is not None
+                    and test_iter is not None
+                    and epoch > 0
+                    and epoch % test_every == 0
+                ):
+                    model.eval()
+                    with torch.no_grad():
+                        try:
+                            test_sample = next(test_iter)
+                        except StopIteration:
+                            test_iter = iter(test_dl)
+                            test_sample = next(test_iter)
+                        test_enc = test_sample["encoder_input"]
+                        test_targ = test_sample["target"]  # batch_size, seq_len, K
+                        model_input = test_targ
+                        test_t = test_sample["t"]
+                        total_it = (
+                            torch.ones_like(test_t, device=accelerator.device)
+                            * test_dl_inference_steps
                         )
-                        model_input = bayesian_inference(
-                            model_input,
-                            test_output,
-                            cur_it,
-                            total_it,
-                            model.learnable_beta,
-                            test_targ.shape[-1],
+                        for i in range(1, test_dl_inference_steps + 1):
+                            cur_it = (
+                                torch.ones_like(test_t, device=accelerator.device) * i
+                            )
+                            t = dis_t(cur_it, total_it).to(accelerator.device)
+                            test_output, _ = model.forward(
+                                test_enc, model_input, t, inference=True
+                            )
+                            model_input = bayesian_inference(
+                                model_input,
+                                test_output,
+                                cur_it,
+                                total_it,
+                                model.learnable_beta,
+                                test_targ.shape[-1],
+                            )
+                        # we calculate accuracy that model_input has against test_targ
+                        # for each batch, for each sequence position, we check if the argmax
+                        # of model_input matches the argmax of test_targ, then average over
+                        # the sequence length and batch size
+                        correct = (
+                            (model_input.argmax(dim=-1) == test_targ.argmax(dim=-1))
+                            .float()
+                            .mean()
                         )
-                    # we calculate accuracy that model_input has against test_targ
-                    # for each batch, for each sequence position, we check if the argmax
-                    # of model_input matches the argmax of test_targ, then average over
-                    # the sequence length and batch size
-                    correct = (
-                        (model_input.argmax(dim=-1) == test_targ.argmax(dim=-1))
-                        .float()
-                        .mean()
-                    )
-                    accelerator.log({"test_accuracy": correct.item()}, step=epoch)
-                model.train()
+                        accelerator.log({"test_accuracy": correct.item()}, step=epoch)
+                    model.train()
 
-            if epoch % save_every == 0:
-                pbar_description += " - Saving checkpoint"
-                pbar.set_description(pbar_description)
-                checkpoint_manager.save(save_dir, epoch)
-            else:
-                pbar.set_description(pbar_description)
-        accelerator.end_training()
+                if epoch % save_every == 0:
+                    pbar_description += " - Saving checkpoint"
+                    pbar.set_description(pbar_description)
+                    checkpoint_manager.save(save_dir, epoch)
+                else:
+                    pbar.set_description(pbar_description)
+            accelerator.end_training()
 
-        checkpoint_manager.save(save_dir, epoch)
-    except KeyboardInterrupt:
-        print("Training interrupted. Saving checkpoint...")
-        checkpoint_manager.save(save_dir, epoch)
-        accelerator.end_training()
-        raise KeyboardInterrupt("Training interrupted by user.")
-    except RuntimeError as e:
-        print(f"Runtime error occurred: {e}")
-        # torch.save(debug_data_past_epoch, "debug_data_past_epoch.pt")
-        # torch.save(debug_data_current_epoch, "debug_data_current_epoch.pt")
-    finally:
-        accelerator.end_training()
-        checkpoint_manager.save(save_dir, epoch)
+            checkpoint_manager.save(save_dir, epoch)
+        except KeyboardInterrupt:
+            print("Training interrupted. Saving checkpoint...")
+            checkpoint_manager.save(save_dir, epoch)
+            accelerator.end_training()
+            raise KeyboardInterrupt("Training interrupted by user.")
+        except RuntimeError as e:
+            print(f"Runtime error occurred: {e}")
+            torch.save(debug_data_past_epoch, "debug_data_past_epoch.pt")
+            torch.save(debug_data_current_epoch, "debug_data_current_epoch.pt")
+        finally:
+            accelerator.end_training()
+            checkpoint_manager.save(save_dir, epoch)

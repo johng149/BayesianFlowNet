@@ -14,6 +14,7 @@ class LearnableBetaScheduleNI(nn.Module):
         encoding_dim=256,
         learner_weight: float = 0.0,
         fourier_schedule: bool = False,
+        learned_scaling: bool = True,
     ):
         """
         NI stands for Neural Integral.
@@ -32,6 +33,7 @@ class LearnableBetaScheduleNI(nn.Module):
             beta_1=reference_beta_1,
             learner_weight=learner_weight,
             fourier_schedule=fourier_schedule,
+            learned_scaling=learned_scaling,
         )
 
     def beta_1(self, K: int, device) -> float:

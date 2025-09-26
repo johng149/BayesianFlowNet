@@ -19,13 +19,13 @@ from src.training.training import train_discrete_model
 
 accelerator = Accelerator(project_dir="./runs/shakespeare")
 tokenizer = Tokenizer()
-max_seq_len = 168
+max_seq_len = 56
 test_ds = ShakespeareDataset(
     tokenizer=tokenizer, max_length=max_seq_len, folds=1, train=False
 )
 
 collate_fn = collate_fn_maker(
-    tokenizer=tokenizer, max_masks=3, min_masks=1, max_fill=0.95, min_fill=0.05
+    tokenizer=tokenizer, max_masks=3, min_masks=1, max_fill=0.2, min_fill=0.2
 )
 
 model_kwargs = {
@@ -33,10 +33,10 @@ model_kwargs = {
     "K": tokenizer.vocab_size(),
     "hidden_dim": 512,
     "num_heads": 8,
-    "layers": 5,
+    "layers": 2,
     # beta_1 from https://arxiv.org/html/2407.20294v2 equation 5
     "reference_beta_1": 20.4054 / tokenizer.vocab_size(),
-    "learner_weight": 1.0,
+    "learner_weight": 0.0,
     "freeze_body": False,
 }
 model = DiscreteModel(**model_kwargs)
@@ -60,7 +60,7 @@ metadata = CheckpointMetadata(
     num_accelerators=accelerator.num_processes,
 )
 
-checkpoint_dir = "./checkpoint/shakespeare_byt5_baseline"
+checkpoint_dir = "./checkpoint/shakespeare_byt5_small_baseline"
 checkpoint_manager = CheckpointManager()
 print("Preparing model...")
 checkpoint_manager.prepare(model, body_opt, schedule_opt, accelerator, metadata)

@@ -98,6 +98,7 @@ class DiscreteModel(nn.Module):
         freeze_body: bool = False,
         learner_weight: float = 0.0,
         fourier_schedule: bool = False,
+        learned_scaling: bool = True,
     ):
         super().__init__()
         assert hidden_dim % num_heads == 0, "hidden_dim must be divisble by num_heads"
@@ -105,6 +106,7 @@ class DiscreteModel(nn.Module):
             reference_beta_1=reference_beta_1,
             learner_weight=learner_weight,
             fourier_schedule=fourier_schedule,
+            learned_scaling=learned_scaling,
         )
         self.body = ModelBody(max_seq_len, K, hidden_dim, num_heads, layers, dropout)
         self._init_weights()
@@ -156,7 +158,9 @@ class DiscreteModel(nn.Module):
         assert t.ndim == 1, "t should be a 1D tensor of shape (batch_size,)"
         assert beta.ndim == 1, "beta should be a 1D tensor of shape (batch_size,)"
 
-        y = y_distribution(beta, x.shape[-1], x)  # Shape: (batch_size, seq_len, K)
+        y, ep = y_distribution(beta, x.shape[-1], x)  # Shape: (batch_size, seq_len, K)
+        torch.save(ep, "debug_ep.pt")
+        # TODO: remove all `torch.save` calls for performance after debugging
         theta_tensor = theta(y)  # Shape: (batch_size, seq_len, K)
         return theta_tensor
 

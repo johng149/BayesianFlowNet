@@ -315,6 +315,7 @@ class MonotonicNN(nn.Module):
         learner_weight=0.0,
         epsilon: float = 1e-8,
         fourier_schedule: bool = False,
+        learned_scaling: bool = True,
     ):
         super().__init__()
         # The MonotonicNN takes the variable to be integrated over (dim 1)
@@ -327,6 +328,7 @@ class MonotonicNN(nn.Module):
         # train this schedule, with learner weight = 1.0
         self.learner_weight = learner_weight
         self.beta_1 = beta_1
+        self.learned_scaling = learned_scaling  # if learned scaling is False, we use beta_1 with normalization
         self.integrand = IntegrandNN_PE(
             in_d, hidden_layers, encoding_dim=encoding_dim, use_fourier=fourier_schedule
         )
@@ -363,14 +365,36 @@ class MonotonicNN(nn.Module):
             )
             assert isinstance(integral_x, Tensor)
 
+            integral_1 = (
+                1.0
+                if self.learned_scaling
+                else ParallelNeuralIntegral.apply(
+                    x0,
+                    torch.ones_like(x),
+                    self.integrand,
+                    flat_params,
+                    h,
+                    self.nb_steps,
+                )
+            )
+
+            assert isinstance(integral_1, Tensor) or isinstance(integral_1, float)
+
+            if not self.learned_scaling:
+                assert isinstance(integral_1, Tensor)
+                # TODO: does this actually fix the NaN issue?
+                integral_x = torch.clamp(integral_x, min=self.epsilon, max=1.0)
+                integral_1 = torch.clamp(integral_1, min=self.epsilon, max=1.0)
+
             integral_norm = (
-                integral_x  # / integral_1, seems we don't need this norming?
+                integral_x
+                / integral_1  # , seems we don't need this norming?
                 # it's actually even worse than that. If we try to hard-code a target beta_1
                 # value by doing beta_1 * integral_norm at time t=1.0, we have a much higher chance of ending up
                 # with NaN loss, for whatever reason
             )
 
-            scaling = self.scaling(h)
+            scaling = self.scaling(h) if self.learned_scaling else self.beta_1
             learner_beta = (integral_norm * scaling) + self.epsilon
         return (
             1 - self.learner_weight
