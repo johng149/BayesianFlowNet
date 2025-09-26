@@ -53,7 +53,7 @@ def y(sampled_one_hot: Tensor, accuracy: Tensor) -> Tensor:
     epsilon = torch.normal(0, 1, sampled_one_hot.shape, device=sampled_one_hot.device)
     return mean + variance * epsilon  # I know the name `variance` suggests it should be squared, but this works just fine
 
-def bayesian_update(y: Tensor, model_input: Tensor) -> Tensor:
+def bayesian_update(y: Tensor, model_input: Tensor, eps: float = 1e-8) -> Tensor:
     """
     Args:
         y: Noisy version of the sampled one-hot tensor of shape (batch_size, seq_len, K).
@@ -61,8 +61,11 @@ def bayesian_update(y: Tensor, model_input: Tensor) -> Tensor:
     Returns:
         Resulting tensor after applying Bayesian update to the model input based on the noisy output y.
     """
-    res = torch.exp(y) * model_input
-    return res / torch.sum(res, dim=-1, keepdim=True)  # normalize to ensure it sums to 1 across the last dimension
+    log_model_input = torch.log(model_input + eps) # add eps to avoid log(0)
+    z = y + log_model_input
+    log_new_probs = F.log_softmax(z, dim=-1)
+    res = torch.exp(log_new_probs)
+    return res
 
 def bayesian_inference(model_input: Tensor, model_output_logits: Tensor, i: Tensor, n: Tensor, beta_1: Tensor) -> Tensor:
     """
@@ -78,4 +81,9 @@ def bayesian_inference(model_input: Tensor, model_output_logits: Tensor, i: Tens
     acc = accuracy(i, n, beta_1)
     sampled = sample_model_output(model_output_logits)
     noisy_y = y(sampled, acc)
-    return bayesian_update(noisy_y, model_input)
+
+    # we need to do `(model_input + 1) / 2` to convert the input from [-1, 1] to [0, 1]
+    # if we did not, the parameters of the distribution wouldn't produce a valid probability distribution
+    # and so the `bayesian_update` may end up with NaN values
+    # however, upon returning, we need to convert it back to [-1, 1] as that is what the model is trained on
+    return bayesian_update(noisy_y, (model_input + 1) / 2) * 2 - 1
