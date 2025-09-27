@@ -64,15 +64,16 @@ def collate_fn(batch):
     the sequences in the batch
 
     Args:
-        batch: List of dictionaries, each containing 'x', 't', and 'beta'.
+        batch: List of dictionaries, each containing 'x', 't', 'beta', 'beta_1', and 'K'
     Returns:
         A dictionary with keys 'x', 't', 'beta_1' and 'theta', where 'x' is a tensor of shape
         (batch_size, seq_len, K), 't' is a tensor of shape (batch_size,), 'beta_1'
         is a tensor of shape (batch_size,), and 'theta' is the transformed version of 'x'.
     """
+    K = batch[0]["K"]
     x = [item["x"] for item in batch]
     min_length = min(seq.shape[0] for seq in x)
-    x = [tensor[:min_length] for tensor in x]
+    x = [F.one_hot(tensor[:min_length], num_classes=K) for tensor in x]
 
     x = torch.stack(x, dim=0)  # Shape: (batch_size, seq_len, K)
     t = torch.cat([item["t"] for item in batch], dim=0)  # Shape: (batch_size,)
