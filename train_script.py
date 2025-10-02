@@ -1,28 +1,42 @@
+from tracemalloc import start
+
 import torch
 from accelerate import Accelerator
-from matplotlib import pyplot as plt
-from safetensors.torch import load_file
-from transformers import AutoTokenizer
+from accelerate.utils import TorchDynamoPlugin
 
 from src.datasets.discrete_helper import collate_fn
 from src.datasets.shakespeare.shakespeare import ShakespeareDataset
 from src.inference.discrete_inference import bayesian_inference, dis_t
 from src.nn.models.discrete_model import DiscreteModel
-from src.tokenizers.gpt2.gpt2_tokenizer import GPT2Tokenizer
+from src.tokenizers.byt5.byt5_tokenizer import ByT5Tokenizer as Tokenizer
 from src.training.checkpoint import CheckpointManager, CheckpointMetadata
-from src.training.training import train_discrete_model
+from src.training.training import TrainingContext, train_discrete_model
 
-accelerator = Accelerator()
+# dynamo = TorchDynamoPlugin(
+#     backend="inductor",  # pyright: ignore[reportArgumentType]
+#     mode="default",
+#     fullgraph=True,
+#     dynamic=True,
+# )
+dynamo = None
+accelerator = Accelerator(
+    log_with="tensorboard", project_dir="./runs", dynamo_plugin=dynamo
+)
 print(f"Using device: {accelerator.device}")
 print(f"Num processes: {accelerator.num_processes}")
 print(
     f"Using fsdp: {hasattr(accelerator.state, 'fsdp_plugin') and accelerator.state.fsdp_plugin is not None}"
 )
-tokenizer = GPT2Tokenizer()
+tokenizer = Tokenizer()
 max_seq_len = 32
+batch_size = 168
 train_ds = ShakespeareDataset(tokenizer=tokenizer, max_length=max_seq_len)
 train_dl = torch.utils.data.DataLoader(
-    train_ds, batch_size=32, shuffle=True, collate_fn=collate_fn
+    train_ds, batch_size=batch_size, shuffle=True, collate_fn=collate_fn
+)
+test_ds = ShakespeareDataset(tokenizer=tokenizer, max_length=max_seq_len, train=False)
+test_dl = torch.utils.data.DataLoader(
+    test_ds, batch_size=batch_size, shuffle=False, collate_fn=collate_fn
 )
 
 
@@ -49,78 +63,37 @@ metadata = CheckpointMetadata(
     num_accelerators=accelerator.num_processes,
 )
 
+accelerator.init_trackers("shakespeare")
+
 checkpoint_manager = CheckpointManager()
 checkpoint_manager.prepare(model, opt, accelerator, metadata)
 checkpoint_manager.load("./checkpoint/shakespeare", error_if_not_exists=False)
+start_epoch = (
+    checkpoint_manager.metadata.current_epoch if checkpoint_manager.metadata else 0
+)
 
 model, opt = checkpoint_manager.model, checkpoint_manager.optimizer
-train_dl = accelerator.prepare(train_dl)
+train_dl, test_dl = accelerator.prepare(train_dl, test_dl)
 
 assert model is not None
 
-loss_tracker = []
+print(f"Starting epoch: {start_epoch}")
 
-train_discrete_model(
-    model, opt, train_dl, epochs=2, accelerator=accelerator, loss_tracker=loss_tracker
+epochs = 500
+
+train_context = TrainingContext(
+    model=model,
+    optimizer=opt,
+    train_dl=train_dl,
+    epochs=epochs,
+    accelerator=accelerator,
+    checkpoint_manager=checkpoint_manager,
+    save_dir="./checkpoint/shakespeare",
+    starting_epoch=start_epoch,
+    save_every=320,
+    test_every=128,
+    test_inference_steps=100,
+    test_dl=test_dl,
 )
-checkpoint_manager.save("./checkpoint/shakespeare")
 
-# plot loss to file
-plt.plot(loss_tracker)
-plt.xlabel("Epoch")
-plt.ylabel("Loss")
-plt.title("Training Loss")
-plt.savefig("training_loss.png")
-plt.show()
-
-model_input = torch.normal(0, 1, (1, max_seq_len, tokenizer.vocab_size())).to(
-    accelerator.device
-)
-model_input = torch.softmax(model_input, dim=-1) * 2 - 1
-
-n = 190
-prev_debug_data = None
-
-for i in range(1, n + 1):
-    if i % 10 == 0:
-        tokenizer.decode(model_input.squeeze(0))
-    cur_it = torch.tensor([i], device=accelerator.device)
-    total_it = torch.tensor([n], device=accelerator.device)
-    t = dis_t(cur_it, total_it).to(accelerator.device)
-    dis_beta_1 = torch.ones_like(t, device=accelerator.device) * 4
-
-    current_model_input = model_input.clone()
-
-    model_output = model.forward(model_input, t)
-    # first check if model output contains nan values
-    if torch.isnan(model_output).any():
-        print(
-            f"Something went wrong during inference at iteration {i}. Model output contains NaN values."
-        )
-        # now save the model input and output for debugging
-        debug_data = {
-            "current_iteration": {
-                "model_input": current_model_input,
-                "model_output": model_output,
-                "t": t,
-                "iteration": i,
-            }
-        }
-        if prev_debug_data:
-            debug_data["previous_iteration"] = prev_debug_data
-
-        torch.save(debug_data, f"debug_nan_{i}.pt")
-        break  # Stop inference after saving
-
-    prev_debug_data = {
-        "model_input": current_model_input,
-        "model_output": model_output,
-        "t": t,
-        "iteration": i,
-    }
-    model_input = bayesian_inference(
-        model_input, model_output, cur_it, total_it, dis_beta_1
-    )
-
-print("Final model result:")
-print(tokenizer.decode(model_input.squeeze(0)))
+train_discrete_model(train_context)

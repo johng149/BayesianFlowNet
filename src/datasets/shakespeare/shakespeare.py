@@ -42,4 +42,10 @@ class ShakespeareDataset(Dataset):
         seq = self.data[start:end]
         t = sample_t(1, self.min_t)
         beta = beta_t(self.beta_1, t)
-        return {"x": seq, "t": t, "beta": beta, "beta_1": self.beta_1}
+        return {
+            "x": seq,
+            "t": t,
+            "beta": beta,
+            "beta_1": self.beta_1,
+            "K": self.tokenizer.vocab_size(),
+        }

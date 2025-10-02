@@ -9,12 +9,18 @@ from safetensors.torch import load_file
 
 class CheckpointMetadata:
     def __init__(
-        self, model_kwargs, optimizer_kwargs, is_fsdp: bool, num_accelerators: int
+        self,
+        model_kwargs,
+        optimizer_kwargs,
+        is_fsdp: bool,
+        num_accelerators: int,
+        current_epoch: int = 0,
     ):
         self.model_kwargs = model_kwargs
         self.optimizer_kwargs = optimizer_kwargs
         self.is_fsdp = is_fsdp
         self.num_accelerators = num_accelerators
+        self.current_epoch = current_epoch
 
     def to_dict(self):
         return {
@@ -22,6 +28,7 @@ class CheckpointMetadata:
             "optimizer_kwargs": self.optimizer_kwargs,
             "is_fsdp": self.is_fsdp,
             "num_accelerators": self.num_accelerators,
+            "current_epoch": self.current_epoch,
         }
 
 
@@ -46,7 +53,7 @@ class CheckpointManager:
         self.accelerator = accelerator
         self.metadata = metadata
 
-    def save(self, save_directory):
+    def save(self, save_directory, current_epoch: int):
         assert self.accelerator is not None
         assert isinstance(self.metadata, CheckpointMetadata)
         if not self.ready():
@@ -55,6 +62,7 @@ class CheckpointManager:
             )
         self.accelerator.wait_for_everyone()
         self.accelerator.save_state(save_directory)
+        self.metadata.current_epoch = current_epoch
         with open(os.path.join(save_directory, "metadata.json"), "w") as f:
             json.dump(self.metadata.to_dict(), f)
 
@@ -217,3 +225,5 @@ class CheckpointManager:
                 f"Inconsistent checkpoint metadata. Checkpoint metadata FSDP is {is_fsdp}, current FSDP is {self.metadata.is_fsdp}. "
                 f"Checkpoint metadata num accelerators is {accelerators}, current num accelerators is {self.metadata.num_accelerators}."
             )
+
+        self.metadata.current_epoch = checkpoint_metadata["current_epoch"]
