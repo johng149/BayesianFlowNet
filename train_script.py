@@ -1,5 +1,7 @@
+import random
 from tracemalloc import start
 
+import numpy as np
 import torch
 from accelerate import Accelerator
 from accelerate.utils import TorchDynamoPlugin
@@ -12,24 +14,21 @@ from src.tokenizers.byt5.byt5_tokenizer import ByT5Tokenizer as Tokenizer
 from src.training.checkpoint import CheckpointManager, CheckpointMetadata
 from src.training.training import TrainingContext, train_discrete_model
 
-# dynamo = TorchDynamoPlugin(
-#     backend="inductor",  # pyright: ignore[reportArgumentType]
-#     mode="default",
-#     fullgraph=True,
-#     dynamic=True,
-# )
-dynamo = None
-accelerator = Accelerator(
-    log_with="tensorboard", project_dir="./runs", dynamo_plugin=dynamo
-)
+seed = 0
+random.seed(seed)
+np.random.seed(seed)
+torch.manual_seed(seed)
+torch.cuda.manual_seed_all(seed)
+
+accelerator = Accelerator(log_with="tensorboard", project_dir="./runs")
 print(f"Using device: {accelerator.device}")
 print(f"Num processes: {accelerator.num_processes}")
 print(
     f"Using fsdp: {hasattr(accelerator.state, 'fsdp_plugin') and accelerator.state.fsdp_plugin is not None}"
 )
 tokenizer = Tokenizer()
-max_seq_len = 32
-batch_size = 168
+max_seq_len = 56
+batch_size = 256
 train_ds = ShakespeareDataset(tokenizer=tokenizer, max_length=max_seq_len)
 train_dl = torch.utils.data.DataLoader(
     train_ds, batch_size=batch_size, shuffle=True, collate_fn=collate_fn
@@ -43,13 +42,14 @@ test_dl = torch.utils.data.DataLoader(
 model_kwargs = {
     "max_seq_len": max_seq_len,
     "K": tokenizer.vocab_size(),
-    "hidden_dim": 64,
+    "hidden_dim": 512,
     "num_heads": 8,
+    "layers": 5,
 }
 model = DiscreteModel(**model_kwargs)
 
 optimizer_kwargs = {
-    "lr": 1e-3,
+    "lr": 1e-5,
 }
 opt = torch.optim.Adam(
     model.parameters(), **optimizer_kwargs  # pyright: ignore[reportArgumentType]
@@ -63,11 +63,15 @@ metadata = CheckpointMetadata(
     num_accelerators=accelerator.num_processes,
 )
 
-accelerator.init_trackers("shakespeare")
+checkpoint_name = "shakespeare_big_fsdp_1e-5"
+
+accelerator.init_trackers(checkpoint_name)
+
+checkpoint_dir = f"./checkpoint/{checkpoint_name}"
 
 checkpoint_manager = CheckpointManager()
 checkpoint_manager.prepare(model, opt, accelerator, metadata)
-checkpoint_manager.load("./checkpoint/shakespeare", error_if_not_exists=False)
+checkpoint_manager.load(checkpoint_dir, error_if_not_exists=False)
 start_epoch = (
     checkpoint_manager.metadata.current_epoch if checkpoint_manager.metadata else 0
 )
@@ -79,7 +83,7 @@ assert model is not None
 
 print(f"Starting epoch: {start_epoch}")
 
-epochs = 500
+epochs = 310
 
 train_context = TrainingContext(
     model=model,
@@ -88,10 +92,10 @@ train_context = TrainingContext(
     epochs=epochs,
     accelerator=accelerator,
     checkpoint_manager=checkpoint_manager,
-    save_dir="./checkpoint/shakespeare",
+    save_dir=checkpoint_dir,
     starting_epoch=start_epoch,
-    save_every=320,
-    test_every=128,
+    save_every=32000,
+    test_every=4000,
     test_inference_steps=100,
     test_dl=test_dl,
 )

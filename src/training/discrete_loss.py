@@ -33,12 +33,13 @@ def loss(
     ), "model_output_logits must have the same shape as target if provided"
 
     batch_size, seq_len, K = target.shape
+
     if model_output_probs is not None:
         model_output = model_output_probs
     else:
         assert model_output_logits is not None
         model_output = torch.softmax(model_output_logits, dim=-1)
-    result = torch.sum(
-        K * beta_1 * t * torch.sum((target - model_output) ** 2) / (batch_size**2)
+
+    return torch.mean(
+        torch.sum((target - model_output) ** 2, dim=(-2, -1)) * K * beta_1 * t / seq_len
     )
-    return result / seq_len
