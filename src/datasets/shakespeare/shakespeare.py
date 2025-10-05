@@ -37,7 +37,8 @@ class ShakespeareDataset(Dataset):
         return len(self.data)
 
     def __getitem__(self, index) -> Dict[str, Union[Tensor, int]]:
-        start = random.randint(0, len(self.data) - self.max_length)
+        # start = random.randint(0, len(self.data) - self.max_length)
+        start = random.randint(0, 0)
         end = start + self.max_length
         seq = self.data[start:end]
         t = sample_t(1, self.min_t)

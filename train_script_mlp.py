@@ -33,7 +33,7 @@ train_ds = ShakespeareDataset(tokenizer=tokenizer, max_length=max_seq_len)
 train_dl = torch.utils.data.DataLoader(
     train_ds, batch_size=batch_size, shuffle=True, collate_fn=collate_fn, num_workers=3
 )
-test_ds = ShakespeareDataset(tokenizer=tokenizer, max_length=max_seq_len, train=False)
+test_ds = ShakespeareDataset(tokenizer=tokenizer, max_length=max_seq_len)
 test_dl = torch.utils.data.DataLoader(
     test_ds, batch_size=batch_size, shuffle=False, collate_fn=collate_fn, num_workers=3
 )
@@ -42,9 +42,9 @@ test_dl = torch.utils.data.DataLoader(
 model_kwargs = {
     "max_seq_len": max_seq_len,
     "K": tokenizer.vocab_size(),
-    "hidden_dim": 512,
+    "hidden_dim": 256,
     "num_heads": 8,
-    "layers": 5,
+    "layers": 3,
 }
 model = DiscreteModel(**model_kwargs)
 
@@ -67,7 +67,7 @@ metadata = CheckpointMetadata(
     num_accelerators=accelerator.num_processes,
 )
 
-checkpoint_name = "shakespeare_big_fsdp_1e-5_dynamo"
+checkpoint_name = "shakespeare_dynamo_f32"
 
 accelerator.init_trackers(checkpoint_name)
 
