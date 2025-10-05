@@ -20,9 +20,10 @@ class DiscreteSyntheticDataset(Dataset):
         tokenized_length: int = 32,
         mini: int = 0,
         maxi: int = 100,
-        beta_1: float = 4.0,
+        beta_1: float | None = None,
         min_t: float = 1e-6,
     ):
+        beta_1 = beta_1 or 20.4054 / tokenizer.vocab_size()
         self.length = length
         self.tokenized_length = tokenized_length
         self.tokenizer = tokenizer
