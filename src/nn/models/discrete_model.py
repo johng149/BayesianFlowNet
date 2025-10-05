@@ -1,5 +1,22 @@
+import math
+
 import torch
 from torch import nn
+
+
+class SinusoidalTimeEmbedding(nn.Module):
+    def __init__(self, dim):
+        super().__init__()
+        self.dim = dim
+
+    def forward(self, t):
+        device = t.device
+        half_dim = self.dim // 2
+        emb = math.log(10000) / (half_dim - 1)
+        emb = torch.exp(torch.arange(half_dim, device=device, dtype=t.dtype) * -emb)
+        emb = t[:, None] * emb[None, :]
+        emb = torch.cat((emb.sin(), emb.cos()), dim=-1)
+        return emb
 
 
 class DiscreteModel(nn.Module):
@@ -16,7 +33,12 @@ class DiscreteModel(nn.Module):
         assert hidden_dim % num_heads == 0, "hidden_dim must be divisble by num_heads"
         self.emb = nn.Parameter(torch.randn(K, hidden_dim))
         self.pos_emb = nn.Parameter(torch.randn(max_seq_len, hidden_dim))
-        self.time_vec = nn.Parameter(torch.randn(1, hidden_dim))
+        self.time_mlp = nn.Sequential(
+            SinusoidalTimeEmbedding(hidden_dim),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.GELU(),
+            nn.Linear(hidden_dim, hidden_dim),
+        )
         self.layers = nn.ModuleList(
             [
                 nn.TransformerEncoderLayer(
@@ -40,11 +62,8 @@ class DiscreteModel(nn.Module):
 
     def time_emb(self, x, t):
         assert t.ndim == 1, "time vector `t` should be vector of length batch_size"
-        # we need to first unsqueeze t to get it from shape (batch_size,)
-        # to (batch_size, 1) so it is compatible with the time_vec's (1, hidden_dim)
-        # the result is (batch_size, hidden_dim) however the x is
-        # (batch_size, seq_len, hidden_dim) so we need a second unsqueeze
-        return (t.unsqueeze(-1) @ self.time_vec).unsqueeze(-2) + x
+        time_embedding = self.time_mlp(t)
+        return x + time_embedding.unsqueeze(1)
 
     def forward(self, x, t):
         x = self.token_emb(x)
