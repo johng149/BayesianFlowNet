@@ -97,7 +97,7 @@ assert model is not None
 
 print(f"Starting epoch: {start_epoch}")
 
-epochs = 115_732
+epochs = 1_015_732
 
 train_context = TrainingContext(
     model=model,
