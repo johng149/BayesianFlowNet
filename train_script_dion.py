@@ -5,7 +5,7 @@ import numpy as np
 import torch
 from accelerate import Accelerator
 from accelerate.utils import TorchDynamoPlugin
-from torch.optim import AdamW
+from dion import Dion, DionMixedPrecisionConfig
 
 from src.datasets.discrete_helper import collate_fn
 from src.datasets.shakespeare.shakespeare import ShakespeareDataset
@@ -53,12 +53,33 @@ print(
     f"Model has {sum(p.numel() for p in model.parameters() if p.requires_grad)} parameters"
 )
 
+lr = 1e-5
+
+weight_matrices = [p for p in model.layers.parameters() if p.ndim == 2]
+norm_weights = [p for p in model.layers.parameters() if p.ndim == 1]
+emb_weights = [model.emb] + [p for p in model.time_mlp.parameters()]
+classifier_weights = [model.classifier]
+
+param_groups = [
+    dict(params=weight_matrices),
+    dict(params=norm_weights, algorithm="lion", lr=lr / 10),
+    dict(params=emb_weights, algorithm="lion", lr=lr / 10),
+    dict(
+        params=classifier_weights,
+        algorithm="lion",
+        lr=lr / (model_kwargs["hidden_dim"] ** 0.5),
+    ),
+]
+
 optimizer_kwargs = {
-    "lr": 1e-5,
-    "weight_decay": 0.01,
+    "weight_decay": 0.1,
+    "lr": lr,
 }
-opt = AdamW(
-    model.parameters(), **optimizer_kwargs  # pyright: ignore[reportArgumentType]
+
+opt = Dion(
+    param_groups,
+    lr=optimizer_kwargs["lr"],
+    weight_decay=optimizer_kwargs["weight_decay"],
 )
 
 metadata = CheckpointMetadata(
@@ -69,7 +90,7 @@ metadata = CheckpointMetadata(
     num_accelerators=accelerator.num_processes,
 )
 
-checkpoint_name = "shakespeare_full_adamw"
+checkpoint_name = "shakespeare_full_dion2"
 
 accelerator.init_trackers(checkpoint_name)
 
