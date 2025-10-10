@@ -1,22 +1,17 @@
 import random
+from tracemalloc import start
 
 import numpy as np
 import torch
 from accelerate import Accelerator
 from accelerate.utils import TorchDynamoPlugin
-from dion import Dion
-from torch.distributed.device_mesh import DeviceMesh
+from dion import Dion, DionMixedPrecisionConfig
 
 from src.datasets.discrete_helper import collate_fn
-
-# from src.datasets.shakespeare.shakespeare import ShakespeareDataset
-from src.datasets.discrete_synthetic.discrete_synthetic import DiscreteSyntheticDataset
+from src.datasets.shakespeare.shakespeare import ShakespeareDataset
+from src.inference.discrete_inference import bayesian_inference, dis_t
 from src.nn.models.discrete_model import DiscreteModel
-
-# from src.tokenizers.byt5.byt5_tokenizer import ByT5Tokenizer as Tokenizer
-from src.tokenizers.discrete_synthetic.discrete_synthetic_tokenizer import (
-    DiscreteSyntheticTokenizer as Tokenizer,
-)
+from src.tokenizers.byt5.byt5_tokenizer import ByT5Tokenizer as Tokenizer
 from src.training.checkpoint import CheckpointManager, CheckpointMetadata
 from src.training.training import TrainingContext, train_discrete_model
 
@@ -33,19 +28,13 @@ print(
     f"Using fsdp: {hasattr(accelerator.state, 'fsdp_plugin') and accelerator.state.fsdp_plugin is not None}"
 )
 tokenizer = Tokenizer()
-max_seq_len = 32
+max_seq_len = 56
 batch_size = 256
-# train_ds = ShakespeareDataset(tokenizer=tokenizer, max_length=max_seq_len)
-train_ds = DiscreteSyntheticDataset(
-    tokenizer=tokenizer, length=max_seq_len * 2, tokenized_length=max_seq_len
-)
+train_ds = ShakespeareDataset(tokenizer=tokenizer, max_length=max_seq_len)
 train_dl = torch.utils.data.DataLoader(
     train_ds, batch_size=batch_size, shuffle=True, collate_fn=collate_fn, num_workers=3
 )
-# test_ds = ShakespeareDataset(tokenizer=tokenizer, max_length=max_seq_len)
-test_ds = DiscreteSyntheticDataset(
-    tokenizer=tokenizer, length=max_seq_len * 2, tokenized_length=max_seq_len
-)
+test_ds = ShakespeareDataset(tokenizer=tokenizer, max_length=max_seq_len, train=False)
 test_dl = torch.utils.data.DataLoader(
     test_ds, batch_size=batch_size, shuffle=False, collate_fn=collate_fn, num_workers=3
 )
@@ -64,7 +53,7 @@ print(
     f"Model has {sum(p.numel() for p in model.parameters() if p.requires_grad)} parameters"
 )
 
-lr = 5e-4
+lr = 1e-5
 
 weight_matrices = [p for p in model.layers.parameters() if p.ndim == 2]
 norm_weights = [p for p in model.layers.parameters() if p.ndim == 1]
@@ -73,8 +62,8 @@ classifier_weights = [model.classifier]
 
 param_groups = [
     dict(params=weight_matrices),
-    dict(params=norm_weights, algorithm="lion"),
-    dict(params=emb_weights, algorithm="lion"),
+    dict(params=norm_weights, algorithm="lion", lr=lr / 10),
+    dict(params=emb_weights, algorithm="lion", lr=lr / 10),
     dict(
         params=classifier_weights,
         algorithm="lion",
@@ -101,7 +90,7 @@ metadata = CheckpointMetadata(
     num_accelerators=accelerator.num_processes,
 )
 
-checkpoint_name = "shakespeare_synthetic_dion"
+checkpoint_name = "shakespeare_full_dion2"
 
 accelerator.init_trackers(checkpoint_name)
 
@@ -121,7 +110,7 @@ assert model is not None
 
 print(f"Starting epoch: {start_epoch}")
 
-epochs = 1_015_732
+epochs = 2_300_000
 
 train_context = TrainingContext(
     model=model,

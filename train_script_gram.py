@@ -4,13 +4,11 @@ from tracemalloc import start
 import numpy as np
 import torch
 from accelerate import Accelerator
-from accelerate.utils import TorchDynamoPlugin
-from torch.optim import AdamW
 
 from src.datasets.discrete_helper import collate_fn
 from src.datasets.shakespeare.shakespeare import ShakespeareDataset
-from src.inference.discrete_inference import bayesian_inference, dis_t
 from src.nn.models.discrete_model import DiscreteModel
+from src.optimizers.c_adamw import AdamW as Opt
 from src.tokenizers.byt5.byt5_tokenizer import ByT5Tokenizer as Tokenizer
 from src.training.checkpoint import CheckpointManager, CheckpointMetadata
 from src.training.training import TrainingContext, train_discrete_model
@@ -57,9 +55,7 @@ optimizer_kwargs = {
     "lr": 1e-5,
     "weight_decay": 0.01,
 }
-opt = AdamW(
-    model.parameters(), **optimizer_kwargs  # pyright: ignore[reportArgumentType]
-)
+opt = Opt(model.parameters(), **optimizer_kwargs)  # pyright: ignore[reportArgumentType]
 
 metadata = CheckpointMetadata(
     model_kwargs=model_kwargs,
@@ -69,7 +65,7 @@ metadata = CheckpointMetadata(
     num_accelerators=accelerator.num_processes,
 )
 
-checkpoint_name = "shakespeare_full_adamw"
+checkpoint_name = "shakespeare_full_c_adamw"
 
 accelerator.init_trackers(checkpoint_name)
 
