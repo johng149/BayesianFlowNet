@@ -1,9 +1,9 @@
 # remember to install ROCm version if using radeon!!!
 # install requirements and then
-# pip3 install torch==2.8.0 torchvision torchaudio --index-url https://download.pytorch.org/whl/rocm6.3
+# pip3 install torch==2.9.0 torchvision torchaudio --index-url https://download.pytorch.org/whl/rocm6.3
 # the above needs python 3.11 apparently
 ipywidgets==8.1.2
-torch==2.8.0
+torch==2.9.0
 pytest==8.2.2
 tqdm==4.67.1
 ipykernel==6.29.4

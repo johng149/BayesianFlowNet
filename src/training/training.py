@@ -2,7 +2,14 @@ import torch
 from accelerate import Accelerator
 from tqdm.auto import tqdm
 
-from src.datasets.discrete_helper import beta_t, sample_t, theta, y_distribution
+from src.datasets.discrete_helper import (
+    base_decode,
+    base_dims,
+    beta_t,
+    sample_t,
+    theta,
+    y_distribution,
+)
 from src.inference.discrete_inference import bayesian_inference, dis_t
 from src.training.checkpoint import CheckpointManager
 from src.training.discrete_loss import loss
@@ -107,12 +114,27 @@ def test_step(context: TrainingContext, pbar, current_epoch):
         model_input = test_data["theta"]  # batch_size, seq_len, K
         batch_size, seq_len, K = model_input.shape
 
+        # note that here, seq_len is actually the true_seq_len * base_dims and K is base
+        # see the dataset collate function in `discrete_helper.py` for more details
+
         total_iterations = torch.ones_like(t) * context.test_inference_steps
 
         # the first half of the sequence will be kept the other half will be replaced with model output
         # this will serve as a janky conditional generation test
+        # since we are using the base encoding, the actual half is a bit more complicated. We take the
+        # apparent seq_len and divide that by  the base_dims to get the true seq_len, then do
+        # integer division by 2, then multiply back by base_dims to get the actual index to split on
+        base = test_data["base"]
+        true_K = test_data["K"]
+        dims = base_dims(base, true_K)
+        assert (
+            seq_len % dims == 0
+        ), "Sequence length must be divisible by base dimensions"
+        true_seq_len = seq_len // dims
+        true_half_index = true_seq_len // 2
+        half_index = true_half_index * dims
         indices = torch.arange(seq_len, device=model_input.device)
-        lower_half = indices < (seq_len // 2)
+        lower_half = indices < (half_index // 2)
         mask = lower_half.unsqueeze(0).unsqueeze(-1)  # for broadcasting
 
         # the model_input we are given might not be produced by beta at t = 0, so we need to use
@@ -143,12 +165,27 @@ def test_step(context: TrainingContext, pbar, current_epoch):
             (predicted.argmax(dim=-1) == target.argmax(dim=-1)).float().mean().item()
         )
 
+        # the accuracy above is in base encoded space, which may differ from the actual token accuracy
+        # so we need to decode both predicted and target back to integer tokens and compute accuracy as well
+        # note that the decoding here is NOT the one-hot form but decodes back to integer values, so no
+        # argmax is needed
+        predicted_decoded = base_decode(predicted, base, true_K)
+        target_decoded = base_decode(target, base, true_K)
+        true_token_accuracy = (
+            (predicted_decoded == target_decoded).float().mean().item()
+        )
+
         # as for the original model_input, we just calculate the loss as usual
         output = model(model_input, t)
         l = loss(beta_1, t, x, model_output_logits=output)
 
         accelerator.log(
-            {"test/loss": l.item(), "test/accuracy": accuracy}, step=current_epoch
+            {
+                "test/loss": l.item(),
+                "test/accuracy": true_token_accuracy,
+                "test/base_space_accuracy": accuracy,
+            },
+            step=current_epoch,
         )
 
 

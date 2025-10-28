@@ -7,7 +7,7 @@ from accelerate import Accelerator
 from accelerate.utils import TorchDynamoPlugin
 from torch.optim import AdamW
 
-from src.datasets.discrete_helper import collate_fn
+from src.datasets.discrete_helper import base_dims, collate_fn
 from src.datasets.shakespeare.shakespeare import ShakespeareDataset
 from src.inference.discrete_inference import bayesian_inference, dis_t
 from src.nn.models.discrete_model import DiscreteModel
@@ -30,19 +30,23 @@ print(
 tokenizer = Tokenizer()
 max_seq_len = 56
 batch_size = 256
-train_ds = ShakespeareDataset(tokenizer=tokenizer, max_length=max_seq_len)
+base = 8
+train_ds = ShakespeareDataset(tokenizer=tokenizer, max_length=max_seq_len, base=base)
 train_dl = torch.utils.data.DataLoader(
     train_ds, batch_size=batch_size, shuffle=True, collate_fn=collate_fn, num_workers=3
 )
-test_ds = ShakespeareDataset(tokenizer=tokenizer, max_length=max_seq_len, train=False)
+test_ds = ShakespeareDataset(
+    tokenizer=tokenizer, max_length=max_seq_len, train=False, base=base
+)
 test_dl = torch.utils.data.DataLoader(
     test_ds, batch_size=batch_size, shuffle=False, collate_fn=collate_fn, num_workers=3
 )
 
+base_seq_len = base_dims(base, tokenizer.vocab_size())
 
 model_kwargs = {
-    "max_seq_len": max_seq_len,
-    "K": tokenizer.vocab_size(),
+    "max_seq_len": max_seq_len * base_seq_len,
+    "K": base,
     "hidden_dim": 256,
     "num_heads": 8,
     "layers": 3,
@@ -69,7 +73,7 @@ metadata = CheckpointMetadata(
     num_accelerators=accelerator.num_processes,
 )
 
-checkpoint_name = "shakespeare_full_adamw"
+checkpoint_name = f"shakespeare_full_adamw_base{base}"
 
 accelerator.init_trackers(checkpoint_name)
 

@@ -22,8 +22,10 @@ class DiscreteSyntheticDataset(Dataset):
         maxi: int = 100,
         beta_1: float | None = None,
         min_t: float = 1e-6,
+        base: int = 8,
     ):
-        beta_1 = beta_1 or 20.4054 / tokenizer.vocab_size()
+        assert base >= 2, "Base must be at least 2."
+        beta_1 = beta_1 or 20.4054 / base
         self.length = length
         self.tokenized_length = tokenized_length
         self.tokenizer = tokenizer
@@ -31,6 +33,7 @@ class DiscreteSyntheticDataset(Dataset):
         self.maxi = maxi
         self.min_t = min_t
         self.beta_1 = torch.tensor([beta_1])
+        self.base = base
 
     def generate_sequence(self):
         start = random.randint(self.mini, self.maxi - self.length)
@@ -56,4 +59,5 @@ class DiscreteSyntheticDataset(Dataset):
             "beta": beta,
             "beta_1": self.beta_1,
             "K": self.tokenizer.vocab_size(),
+            "base": self.base,
         }
