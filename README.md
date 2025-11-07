@@ -1,0 +1,1 @@
+`TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1 accelerate launch --config_file ./ddp.yaml main.py`

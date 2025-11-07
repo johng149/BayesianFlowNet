@@ -17,7 +17,7 @@ def main():
     accelerator = Accelerator(log_with="tensorboard", project_dir="./runs")
     checkpoint_name = "shakespeare_char"
     checkpoint_dir = "./checkpoints"
-    batch_size = 64
+    batch_size = 256
     seq_len = 32
     min_t = 1e-8
     num_workers = 3
@@ -57,7 +57,7 @@ def main():
         dropout=0.1,
     )
 
-    opt = Opt(model.parameters(), lr=1e-4)
+    opt = Opt(model.parameters(), lr=2e-5)
 
     context = Context(
         save_file_name=checkpoint_name,
