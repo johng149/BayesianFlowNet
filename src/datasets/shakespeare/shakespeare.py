@@ -5,11 +5,12 @@ from torch import Tensor
 from torch.utils.data import Dataset
 
 from datasets import load_dataset
-from src.datasets.dataset_helper import sample_t
+from src.common.data_prep import sample_t
+from src.datasets.dataset_helper import BFNDataset, DatasetOutput
 from src.tokenizers.base import TokenizerBase
 
 
-class ShakespeareDataset(Dataset):
+class ShakespeareDataset(Dataset, BFNDataset):
     def __init__(
         self,
         tokenizer: TokenizerBase,
@@ -31,7 +32,7 @@ class ShakespeareDataset(Dataset):
     def __len__(self):
         return len(self.data)
 
-    def __getitem__(self, index) -> Dict[str, Union[Tensor, int]]:
+    def __getitem__(self, index) -> DatasetOutput:
         start = random.randint(0, len(self.data) - self.max_length)
         end = start + self.max_length
         seq = self.data[start:end]

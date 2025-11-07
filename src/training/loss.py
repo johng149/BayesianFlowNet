@@ -1,7 +1,7 @@
 import torch
 from torch import Tensor
 
-from src.schedule.schedule_output import ScheduleOutput
+from src.schedule.base import ScheduleOutput
 
 
 def loss(

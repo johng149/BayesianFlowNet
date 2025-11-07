@@ -1,8 +1,17 @@
 from abc import ABC, abstractmethod
+from typing import TypedDict
 
 from torch import Tensor
 
-from src.schedule.schedule_output import ScheduleOutput
+from src.common.data_prep import Beta
+
+ScheduleOutput = TypedDict(
+    "ScheduleOutput",
+    {
+        "beta": Beta,
+        "alpha": Tensor,
+    },
+)
 
 
 class Scheduler(ABC):

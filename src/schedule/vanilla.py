@@ -2,8 +2,8 @@ import torch
 from torch import Tensor
 from torch.nn import Module
 
-from src.schedule.base import Scheduler
-from src.schedule.schedule_output import ScheduleOutput
+from src.common.data_prep import Beta
+from src.schedule.base import ScheduleOutput, Scheduler
 
 
 class VanillaScheduler(Module, Scheduler):
@@ -15,4 +15,4 @@ class VanillaScheduler(Module, Scheduler):
     def forward(self, t: Tensor) -> ScheduleOutput:
         beta = self.beta_1 * (t**2)
         alpha = self.beta_1 * 2 * t
-        return ScheduleOutput(beta=beta, alpha=alpha)
+        return ScheduleOutput(beta=Beta(beta), alpha=alpha)
