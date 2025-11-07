@@ -6,10 +6,8 @@ from torch.distributions import Categorical
 from torch.nn import Module
 from torch.nn import functional as F
 
+from src.common.data_prep_types import Accuracy, Beta
 from src.schedule.base import Scheduler
-
-Accuracy = NewType("Accuracy", Tensor)
-Beta = NewType("Beta", Tensor)
 
 
 def sample_t(batch_size: int, min_t=1e-6) -> Tensor:

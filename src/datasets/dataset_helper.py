@@ -5,11 +5,17 @@ from torch import Tensor
 from torch.nn import functional as F
 
 from src.common.data_prep import theta, y
-from src.schedule.base import Scheduler
+from src.schedule.base import ScheduleOutput, Scheduler
 
 DatasetOutput = TypedDict("DatasetOutput", {"x": Tensor, "t": Tensor})
 CollateOutput = TypedDict(
-    "CollateOutput", {"ground_truth": Tensor, "t": Tensor, "model_input": Tensor}
+    "CollateOutput",
+    {
+        "ground_truth": Tensor,
+        "t": Tensor,
+        "model_input": Tensor,
+        "scheduler_output": ScheduleOutput,
+    },
 )
 
 from abc import ABC
@@ -50,6 +56,7 @@ def make_collate_fn(
             "ground_truth": x,
             "t": t,
             "model_input": model_input,
+            "scheduler_output": scheduler_output,
         }
 
     return collate_fn
