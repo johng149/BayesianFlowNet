@@ -6,9 +6,13 @@ from torch.utils.data import DataLoader
 
 from src.datasets.dataset_helper import make_collate_fn
 from src.datasets.shakespeare.shakespeare import ShakespeareDataset as Ds
+
+# from src.datasets.synth.synthetic import DiscreteSyntheticDataset as Ds
 from src.nn.discrete_model import DiscreteModel as Model
 from src.schedule.vanilla import VanillaScheduler as Scheduler
 from src.tokenizers.character_level.character_level import CharacterLevelTokenizer as Tk
+
+# from src.tokenizers.synth.synthetic import DiscreteSyntheticTokenizer as Tk
 from src.training.train import TrainingContext as Context
 from src.training.train import train
 
@@ -21,15 +25,15 @@ def main():
     seq_len = 32
     min_t = 1e-8
     num_workers = 3
-    hidden_size = 768
-    layers = 7
+    hidden_size = 128
+    layers = 3
     heads = 8
     tk = Tk()
     vocab_size = tk.vocab_size()
     scheduler = Scheduler(0.5625)
 
-    train_ds = Ds(tk, seq_len, min_t)
-    test_ds = Ds(tk, seq_len, min_t, train=False)
+    train_ds = Ds(tk, seq_len, min_t=min_t)
+    test_ds = Ds(tk, seq_len, min_t=min_t, train=False)
 
     collate_fn = make_collate_fn(scheduler, vocab_size)
 
