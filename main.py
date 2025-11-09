@@ -19,14 +19,14 @@ from src.training.train import train
 
 def main():
     accelerator = Accelerator(log_with="tensorboard", project_dir="./runs")
-    checkpoint_name = "shakespeare_char"
+    checkpoint_name = "shakespeare_char_chunky_1e-6lr"
     checkpoint_dir = "./checkpoints"
     batch_size = 256
     seq_len = 32
     min_t = 1e-8
     num_workers = 3
-    hidden_size = 128
-    layers = 3
+    hidden_size = 768
+    layers = 7
     heads = 8
     tk = Tk()
     vocab_size = tk.vocab_size()
@@ -61,7 +61,11 @@ def main():
         dropout=0.1,
     )
 
-    opt = Opt(model.parameters(), lr=2e-5)
+    print(
+        f"Created model with {sum(p.numel() for p in model.parameters())} parameters."
+    )
+
+    opt = Opt(model.parameters(), lr=1e-6)
 
     context = Context(
         save_file_name=checkpoint_name,

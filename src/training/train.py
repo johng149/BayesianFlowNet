@@ -38,7 +38,11 @@ class TrainingContext:
     ):
         # note that currently scheduler is not directly saved in the checkpoint, if you
         # want the scheduler to be saved (say, if you are using parameterized schedulers),
-        # you need to include it in the model as a submodule
+        # you need to include it in the model as a submodule.
+        # actually, you might want to use the accelerator's `register_for_checkpointing` function
+        # instead. For example, if the schedule is a EMA parameterized scheduler, saving and loading
+        # in distributed setting (which would happen if the scheduler was a submodule of the model)
+        # would be trickier.
         self.save_file_name = save_file_name
         self.accelerator = accelerator
         self.model = model

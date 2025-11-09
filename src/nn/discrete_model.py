@@ -47,6 +47,7 @@ class DiscreteModel(nn.Module):
                     hidden_dim * 4,
                     dropout,
                     batch_first=True,
+                    norm_first=True,
                     bias=False,
                 )
                 for i in range(layers)
