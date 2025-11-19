@@ -37,7 +37,7 @@ class DiscreteSyntheticDataset(Dataset, BFNDataset):
         return tokenized[: self.tokenized_length]
 
     def __len__(self):
-        return 10000
+        return 10_000_000
 
     def __getitem__(self, idx) -> DatasetOutput:
         seq = self.generate_sequence()

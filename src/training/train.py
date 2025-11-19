@@ -2,10 +2,12 @@ from pathlib import Path
 
 import torch
 from accelerate import Accelerator
+from accelerate.scheduler import AcceleratedScheduler
 from torch import Tensor
 from torch.nn import Module
 from torch.nn import functional as F
 from torch.optim import Optimizer
+from torch.optim.lr_scheduler import LRScheduler, ReduceLROnPlateau
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from tqdm.auto import tqdm
@@ -28,6 +30,7 @@ class TrainingContext:
         optim: Optimizer | None,
         train_loader: DataLoader,
         test_loader: DataLoader | None = None,
+        lr_scheduler: LRScheduler | None = None,
         target_epochs: int = 100,
         seen_epochs: int = 0,
         test_every: int = 125,
@@ -48,6 +51,7 @@ class TrainingContext:
         self.model = model
         self.scheduler = scheduler
         self.optim = optim
+        self.lr_scheduler = lr_scheduler
         self.train_loader = train_loader
         self.test_loader = test_loader
         self.target_epochs = target_epochs
@@ -102,9 +106,10 @@ class TrainingContext:
 
     def load(self, ignore_missing: bool = True):
         checkpoint_path = self.save_dir / self.save_file_name
-        self.model, self.optim, self.seen_epochs = load_checkpoint(
+        self.model, self.optim, self.seen_epochs, self.lr_scheduler = load_checkpoint(
             model=self.model,
             optim=self.optim,
+            lr_scheduler=self.lr_scheduler,
             accelerator=self.accelerator,
             path=checkpoint_path,
             ignore_missing=ignore_missing,
@@ -127,12 +132,20 @@ class TrainingContext:
             and self.accelerator.state.fsdp_plugin is not None
         )
 
+    def get_lr_scheduler(self) -> AcceleratedScheduler | None:
+        assert (
+            isinstance(self.lr_scheduler, AcceleratedScheduler)
+            or self.lr_scheduler is None
+        ), "By the time you call this, the lr_scheduler should have been wrapped by the accelerator due to the load from checkpoint function"
+        return self.lr_scheduler
+
 
 def train_step(context: TrainingContext, current_epoch: int):
     batch: CollateOutput = context.get_train_data()
     model = context.model
     model.train()
     optim = context.get_optimizer()
+    lr_scheduler = context.get_lr_scheduler()
 
     model_input = batch["model_input"]
     t = batch["t"]
@@ -143,6 +156,8 @@ def train_step(context: TrainingContext, current_epoch: int):
     l = loss(scheduler_output, ground_truth, prediction)
     context.accelerator.backward(l)
     optim.step()
+    if lr_scheduler is not None:
+        lr_scheduler.step(metrics=l)
     context.log("train/loss", l.item(), current_epoch)
 
 
