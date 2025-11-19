@@ -62,7 +62,9 @@ class DiscreteModel(nn.Module):
         return x + self.pos_emb[: x.shape[1]]
 
     def time_emb(self, x, t):
-        assert t.ndim == 1, "time vector `t` should be vector of length batch_size"
+        assert (
+            t.ndim == 1
+        ), f"time vector `t` should be vector of length batch_size. Got shape {t.shape} while x has shape {x.shape}"
         time_embedding = self.time_mlp(t)
         return x + time_embedding.unsqueeze(1)
 

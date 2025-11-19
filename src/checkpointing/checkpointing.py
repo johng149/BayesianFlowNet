@@ -11,6 +11,7 @@ from torch.distributed.fsdp._optim_utils import _optim_state_dict
 from torch.distributed.tensor import DTensor
 from torch.nn import Module
 from torch.optim import Optimizer
+from torch.optim.lr_scheduler import LRScheduler
 
 
 def save_checkpoint(
@@ -79,10 +80,11 @@ def _merge_model_shards(
 def load_checkpoint(
     model: Module,
     optim: Optimizer | None,
+    lr_scheduler: LRScheduler | None,
     accelerator: Accelerator,
     path: str | Path,
     ignore_missing: bool = True,
-) -> tuple[Module, Optimizer | None, int | None]:
+) -> tuple[Module, Optimizer | None, int | None, LRScheduler | None]:
     """
     Load the model and optimizer state dictionaries from a checkpoint using the provided accelerator.
 
@@ -93,7 +95,7 @@ def load_checkpoint(
         path (str | Path): The file path to load the checkpoint from.
         ignore_missing (bool): If checkpoint metadata is missing, whether to abort loading or continue
     Returns:
-        tuple: A tuple containing the loaded model, optimizer, and seen epochs (if available).
+        tuple: A tuple containing the loaded model, optimizer, seen epochs and learning rate scheduler (if available).
 
     There are a few cases to handle, namely:
     1. We saved checkpoint with non-FSDP and we are now loading it with non-FSDP.
@@ -134,8 +136,8 @@ def load_checkpoint(
             warn(
                 f"Checkpoint metadata file {metadata_path} does not exist. Assuming this is new training run"
             )
-            model, optim = accelerator.prepare(model, optim)
-            return model, optim, None
+            model, optim, lr_scheduler = accelerator.prepare(model, optim, lr_scheduler)
+            return model, optim, None, lr_scheduler
         else:
             raise FileNotFoundError(
                 f"Checkpoint metadata file {metadata_path} does not exist."
@@ -155,7 +157,7 @@ def load_checkpoint(
     num_processes_current = accelerator.num_processes
 
     if not is_fsdp_saved and not is_fsdp_current:
-        model, optim = accelerator.prepare(model, optim)
+        model, optim, lr_scheduler = accelerator.prepare(model, optim, lr_scheduler)
         accelerator.load_state(str(save_path))
     elif not is_fsdp_saved and is_fsdp_current:
         # we need to target model file inside checkpoint directory, we can do this by checking to see if
@@ -189,7 +191,7 @@ def load_checkpoint(
         )
 
         model.load_state_dict(state_dict)
-        model, optim = accelerator.prepare(model, optim)
+        model, optim, lr_scheduler = accelerator.prepare(model, optim, lr_scheduler)
     elif is_fsdp_saved and not is_fsdp_current:
         if optim is not None:
             raise RuntimeError(
@@ -211,7 +213,7 @@ def load_checkpoint(
             torch.load(save_path / "merged_model" / "pytorch_model.bin")
         )
 
-        model, optim = accelerator.prepare(model, optim)
+        model, optim, lr_scheduler = accelerator.prepare(model, optim, lr_scheduler)
 
         # and now delete the merged model directory to save space
         if accelerator.is_main_process:
@@ -239,7 +241,7 @@ def load_checkpoint(
                 torch.load(save_path / "merged_model" / "pytorch_model.bin")
             )
 
-            model, optim = accelerator.prepare(model, optim)
+            model, optim, lr_scheduler = accelerator.prepare(model, optim, lr_scheduler)
 
             # and now delete the merged model directory to save space
             if accelerator.is_main_process:
@@ -251,4 +253,4 @@ def load_checkpoint(
             f"Checkpoint metadata num accelerators is {num_processes_saved}, current num accelerators is {num_processes_current}."
         )
 
-    return model, optim, seen_epochs
+    return model, optim, seen_epochs, lr_scheduler

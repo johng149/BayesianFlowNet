@@ -131,5 +131,5 @@ def theta(y: Tensor):
     """
     assert y.ndim == 3, "y should be a 3D tensor of shape (batch_size, seq_len, K)"
     theta = F.softmax(y, dim=-1)
-    theta = 2 * theta - 1  # scale to [-1, 1]
+    # theta = 2 * theta - 1  # scale to [-1, 1]
     return theta

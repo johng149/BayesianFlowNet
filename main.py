@@ -2,35 +2,32 @@ from sched import scheduler
 
 from accelerate import Accelerator
 from torch.optim import AdamW as Opt
+from torch.optim.lr_scheduler import ReduceLROnPlateau as ReduceLR
 from torch.utils.data import DataLoader
 
 from src.datasets.dataset_helper import make_collate_fn
 from src.datasets.shakespeare.shakespeare import ShakespeareDataset as Ds
-
-# from src.datasets.synth.synthetic import DiscreteSyntheticDataset as Ds
 from src.nn.discrete_model import DiscreteModel as Model
 from src.schedule.vanilla import VanillaScheduler as Scheduler
 from src.tokenizers.character_level.character_level import CharacterLevelTokenizer as Tk
-
-# from src.tokenizers.synth.synthetic import DiscreteSyntheticTokenizer as Tk
 from src.training.train import TrainingContext as Context
 from src.training.train import train
 
 
 def main():
     accelerator = Accelerator(log_with="tensorboard", project_dir="./runs")
-    checkpoint_name = "shakespeare_char_chunky_1e-6lr"
+    checkpoint_name = "g2_shakespeare_char_chunky_min_1e-6_fp16"
     checkpoint_dir = "./checkpoints"
     batch_size = 256
     seq_len = 32
     min_t = 1e-8
-    num_workers = 3
+    num_workers = 4
     hidden_size = 768
-    layers = 7
+    layers = 6
     heads = 8
     tk = Tk()
     vocab_size = tk.vocab_size()
-    scheduler = Scheduler(0.5625)
+    scheduler = Scheduler(20.4054 / vocab_size)
 
     train_ds = Ds(tk, seq_len, min_t=min_t)
     test_ds = Ds(tk, seq_len, min_t=min_t, train=False)
@@ -67,12 +64,17 @@ def main():
 
     opt = Opt(model.parameters(), lr=1e-6)
 
+    lr_plateau = (
+        None  # ReduceLR(opt, mode="min", factor=0.5, patience=500, cooldown=50)
+    )
+
     context = Context(
         save_file_name=checkpoint_name,
         accelerator=accelerator,
         model=model,
         scheduler=scheduler,
         optim=opt,
+        lr_scheduler=lr_plateau,
         train_loader=train_dl,
         test_loader=test_dl,
         target_epochs=15_000_000,

@@ -8,6 +8,7 @@ from torch.nn import functional as F
 
 from src.common.data_prep import accuracy, dis_t, sample_model_output, theta, y
 from src.schedule.base import Scheduler
+from src.tokenizers.base import TokenizerBase
 
 
 def bayesian_update(y: Tensor, model_input: Tensor, eps: float = 1e-8) -> Tensor:
@@ -50,7 +51,7 @@ def bayesian_inference(
     # if we did not, the parameters of the distribution wouldn't produce a valid probability distribution
     # and so the `bayesian_update` may end up with NaN values
     # however, upon returning, we need to convert it back to [-1, 1] as that is what the model is trained on
-    return bayesian_update(noisy_y, (model_input + 1) / 2) * 2 - 1
+    return bayesian_update(noisy_y, model_input)
 
 
 def generative_prior(
@@ -90,6 +91,7 @@ def inference(
     device: torch.device,
     dtype: torch.dtype = torch.float32,
     conditioning_callback: Callable[[Tensor], Tensor] | None = None,
+    tk: TokenizerBase | None = None,
 ):
     total_iterations = torch.ones(batch_size, device=device) * num_steps
     current = generative_prior(
@@ -101,6 +103,8 @@ def inference(
     )
 
     for i in range(1, num_steps + 1):
+        if tk is not None and (i % (num_steps // 10) == 0 or i == num_steps):
+            print(f"Step {i}: {tk.decode(torch.argmax(current, dim=-1)[0].cpu())}")
         current_iteration = torch.ones_like(total_iterations) * i
         curr_t = dis_t(current_iteration, total_iterations)
         output = model(current, curr_t)
@@ -113,5 +117,6 @@ def inference(
             n=total_iterations,
             scheduler=scheduler,
         )
-
-    return current
+    final_t = torch.ones_like(total_iterations)
+    final_output_logits = model(current, final_t)
+    return final_output_logits
