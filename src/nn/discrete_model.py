@@ -31,8 +31,9 @@ class DiscreteModel(nn.Module):
     ):
         super().__init__()
         assert hidden_dim % num_heads == 0, "hidden_dim must be divisble by num_heads"
-        self.emb = nn.Parameter(torch.randn(K, hidden_dim))
-        self.pos_emb = nn.Parameter(torch.randn(max_seq_len, hidden_dim))
+        self.num_layers = layers
+        self.emb = nn.Parameter(torch.randn(K, hidden_dim) * 0.02)
+        self.pos_emb = nn.Parameter(torch.randn(max_seq_len, hidden_dim) * 0.02)
         self.time_mlp = nn.Sequential(
             SinusoidalTimeEmbedding(hidden_dim),
             nn.Linear(hidden_dim, hidden_dim),
@@ -53,7 +54,34 @@ class DiscreteModel(nn.Module):
                 for i in range(layers)
             ]
         )
-        self.classifier = nn.Parameter(torch.randn(hidden_dim, K))
+        self.classifier = nn.Parameter(torch.randn(hidden_dim, K) * 0.02)
+
+        self.apply(self._init_weights)
+        self._residual_scaling()
+
+    def _init_weights(self, module):
+        if isinstance(module, nn.Linear):
+            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+            if module.bias is not None:
+                torch.nn.init.zeros_(module.bias)
+
+    def _residual_scaling(self):
+        scale = 0.02 / (2 * self.num_layers) ** 0.5
+        for layer in self.layers:
+            if isinstance(layer, nn.TransformerEncoderLayer):
+                # 1. MLP output projection (linear2)
+                torch.nn.init.normal_(layer.linear2.weight, mean=0.0, std=scale)
+                if layer.linear2.bias is not None:
+                    torch.nn.init.zeros_(layer.linear2.bias)
+
+                # 2. Attention output projection (self_attn.out_proj)
+                # nn.MultiheadAttention stores the output projection in `out_proj`
+                if hasattr(layer.self_attn, "out_proj"):
+                    torch.nn.init.normal_(
+                        layer.self_attn.out_proj.weight, mean=0.0, std=scale
+                    )
+                    if layer.self_attn.out_proj.bias is not None:
+                        torch.nn.init.zeros_(layer.self_attn.out_proj.bias)
 
     def token_emb(self, x):
         return x @ self.emb

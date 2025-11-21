@@ -16,15 +16,15 @@ from src.training.train import train
 
 def main():
     accelerator = Accelerator(log_with="tensorboard", project_dir="./runs")
-    checkpoint_name = "g2_shakespeare_char_chunky_min_1e-6_fp16"
+    checkpoint_name = "model_redux_shakespeare"
     checkpoint_dir = "./checkpoints"
     batch_size = 256
-    seq_len = 32
+    seq_len = 128
     min_t = 1e-8
-    num_workers = 4
+    num_workers = 3
     hidden_size = 768
     layers = 6
-    heads = 8
+    heads = 12
     tk = Tk()
     vocab_size = tk.vocab_size()
     scheduler = Scheduler(20.4054 / vocab_size)
@@ -62,7 +62,7 @@ def main():
         f"Created model with {sum(p.numel() for p in model.parameters())} parameters."
     )
 
-    opt = Opt(model.parameters(), lr=1e-6)
+    opt = Opt(model.parameters(), lr=1e-4)
 
     lr_plateau = (
         None  # ReduceLR(opt, mode="min", factor=0.5, patience=500, cooldown=50)
