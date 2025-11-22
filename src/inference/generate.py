@@ -119,5 +119,5 @@ def inference(
             scheduler=scheduler,
         )
     final_t = torch.ones_like(total_iterations)
-    final_output_logits = model(current, final_t)
+    final_output_logits = model(current, final_t, encoder_model_input)
     return final_output_logits

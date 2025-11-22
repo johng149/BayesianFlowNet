@@ -206,7 +206,7 @@ def test_step(context: TrainingContext, current_epoch: int):
     target = masker(ground_truth)
     accuracy = (predicted.argmax(dim=-1) == target.argmax(dim=-1)).float().mean().item()
 
-    prediction = model(decoder_model_input, t)
+    prediction = model(decoder_model_input, t, encoder_model_input)
     l = loss(scheduler_output, ground_truth, prediction)
 
     context.log("test/loss", l.item(), current_epoch)
@@ -238,5 +238,9 @@ def train(context: TrainingContext):
     except KeyboardInterrupt:
         print("Training interrupted. Saving checkpoint...")
         context.save(epoch + 1)
+    except TypeError as e:
+        print(f"TypeError during training at epoch {epoch + 1}: {e}")
+        context.save(epoch + 1)
+        raise e
     finally:
         context.end_training()
