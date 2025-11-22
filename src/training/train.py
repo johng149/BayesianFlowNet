@@ -14,7 +14,7 @@ from tqdm.auto import tqdm
 
 from src.checkpointing.checkpointing import load_checkpoint, save_checkpoint
 from src.datasets.dataset_helper import CollateOutput
-from src.inference.conditional import half_callback_maker
+from src.inference.conditional import no_op_callback_maker as callback_maker
 from src.inference.generate import inference
 from src.schedule.base import Scheduler
 from src.training.loss import loss
@@ -38,6 +38,7 @@ class TrainingContext:
         test_inference_steps: int = 100,
         save_dir: str | Path = "./checkpoints",
         metadata_save_file_name: str = "metadata.json",
+        grad_clip: float | None = None,
     ):
         # note that currently scheduler is not directly saved in the checkpoint, if you
         # want the scheduler to be saved (say, if you are using parameterized schedulers),
@@ -61,6 +62,7 @@ class TrainingContext:
         self.test_inference_steps = test_inference_steps
         self.save_dir = Path(save_dir)
         self.metadata_save_file_name = metadata_save_file_name
+        self.grad_clip = grad_clip
 
         self.train_loader, self.test_loader = self.accelerator.prepare(
             self.train_loader, self.test_loader
@@ -139,6 +141,10 @@ class TrainingContext:
         ), "By the time you call this, the lr_scheduler should have been wrapped by the accelerator due to the load from checkpoint function"
         return self.lr_scheduler
 
+    def clip_gradients(self):
+        if self.grad_clip is not None and self.accelerator.sync_gradients:
+            self.accelerator.clip_grad_norm_(self.model.parameters(), self.grad_clip)
+
 
 def train_step(context: TrainingContext, current_epoch: int):
     batch: CollateOutput = context.get_train_data()
@@ -147,14 +153,16 @@ def train_step(context: TrainingContext, current_epoch: int):
     optim = context.get_optimizer()
     lr_scheduler = context.get_lr_scheduler()
 
-    model_input = batch["model_input"]
+    decoder_model_input = batch["decoder_model_input"]
+    encoder_model_input = batch["encoder_model_input"]
     t = batch["t"]
     ground_truth = batch["ground_truth"]
     scheduler_output = batch["scheduler_output"]
-    prediction = model(model_input, t)
+    prediction = model(decoder_model_input, t, encoder_model_input)
     optim.zero_grad()
     l = loss(scheduler_output, ground_truth, prediction)
     context.accelerator.backward(l)
+    context.clip_gradients()
     optim.step()
     if lr_scheduler is not None:
         lr_scheduler.step(metrics=l)
@@ -169,14 +177,15 @@ def test_step(context: TrainingContext, current_epoch: int):
     scheduler = context.scheduler
     model.eval()
 
-    model_input = batch["model_input"]
+    decoder_model_input = batch["decoder_model_input"]
+    encoder_model_input = batch["encoder_model_input"]
     t = batch["t"]
     ground_truth = batch["ground_truth"]
     scheduler_output = batch["scheduler_output"]
 
-    batch_size, seq_len, K = model_input.shape
+    batch_size, seq_len, K = decoder_model_input.shape
 
-    callback, masker = half_callback_maker(ground_truth)
+    callback, masker = callback_maker(ground_truth)
 
     steps = context.test_inference_steps
 
@@ -187,8 +196,9 @@ def test_step(context: TrainingContext, current_epoch: int):
         batch_size,
         seq_len,
         K,
-        model_input.device,
-        model_input.dtype,
+        encoder_model_input,
+        decoder_model_input.device,
+        decoder_model_input.dtype,
         conditioning_callback=callback,
     )
 
@@ -196,7 +206,7 @@ def test_step(context: TrainingContext, current_epoch: int):
     target = masker(ground_truth)
     accuracy = (predicted.argmax(dim=-1) == target.argmax(dim=-1)).float().mean().item()
 
-    prediction = model(model_input, t)
+    prediction = model(decoder_model_input, t)
     l = loss(scheduler_output, ground_truth, prediction)
 
     context.log("test/loss", l.item(), current_epoch)

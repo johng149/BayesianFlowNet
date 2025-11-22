@@ -17,6 +17,9 @@ class CharacterLevelTokenizer(TokenizerBase):
         }
         self.anti_vocab = {idx: char for char, idx in self.vocab.items()}
 
+    def mask_idx(self) -> int:
+        return self.vocab[self.unk_token]
+
     def vocab_size(self) -> int:
         return len(self.vocab)
 

@@ -11,6 +11,10 @@ class TokenizerBase(ABC):
         pass
 
     @abstractmethod
+    def mask_idx(self) -> int:
+        pass
+
+    @abstractmethod
     def encode(self, text: str) -> Tensor:
         pass
 

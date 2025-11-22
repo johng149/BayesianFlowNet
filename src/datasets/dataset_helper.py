@@ -13,7 +13,8 @@ CollateOutput = TypedDict(
     {
         "ground_truth": Tensor,
         "t": Tensor,
-        "model_input": Tensor,
+        "decoder_model_input": Tensor,
+        "encoder_model_input": Tensor,
         "scheduler_output": ScheduleOutput,
     },
 )
@@ -27,7 +28,7 @@ class BFNDataset(ABC):
 
 
 def make_collate_fn(
-    scheduler: Scheduler, vocab_size: int
+    scheduler: Scheduler, vocab_size: int, mask_idx: int
 ) -> Callable[[List[DatasetOutput]], CollateOutput]:
     """
     Resulting collate function encodes input into one-hot vectors assuming classes equal to vocab_size,
@@ -36,6 +37,8 @@ def make_collate_fn(
     Args:
         - scheduler (Scheduler): Scheduler used to determine the amount of noise to add.
         - vocab_size (int): Number of classes for one-hot encoding.
+        - mask_idx (int): Index of the mask token in the vocabulary.
+
     Returns:
         Collate function that can be used in a DataLoader.
     """
@@ -43,19 +46,30 @@ def make_collate_fn(
     def collate_fn(batch: List[DatasetOutput]) -> CollateOutput:
         x = [item["x"] for item in batch]
         min_length = min(seq.shape[0] for seq in x)
-        x = [F.one_hot(seq[:min_length], num_classes=vocab_size) for seq in x]
-        x = torch.stack(x, dim=0)  # batch_size x seq_len x K
+        assert min_length > 1, "Sequences must have length greater than 1."
+        if min_length % 2 != 0:
+            min_length -= 1  # make even length
+        x = [seq[:min_length] for seq in x]
+        x = torch.stack(x, dim=0)  # batch_size x seq_len
+
+        first_half_x = x[:, : min_length // 2]  # batch_size x (min_length/2)
+        second_half_x = x[:, min_length // 2 :]  # batch_size x (min_length/2)
+
+        second_half_x = F.one_hot(
+            second_half_x, num_classes=vocab_size
+        )  # batch_size x (min_length/2) x K
 
         t = torch.cat([item["t"] for item in batch], dim=0)  # batch_size,
         scheduler_output = scheduler(t)
         beta = scheduler_output["beta"]  # batch_size,
-        y_dist = y(x, beta)
+        y_dist = y(second_half_x, beta)
         model_input = theta(y_dist)
 
         return {
-            "ground_truth": x,
+            "ground_truth": second_half_x,
             "t": t,
-            "model_input": model_input,
+            "decoder_model_input": model_input,
+            "encoder_model_input": first_half_x,
             "scheduler_output": scheduler_output,
         }
 

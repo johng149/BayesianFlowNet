@@ -16,7 +16,7 @@ from src.training.train import train
 
 def main():
     accelerator = Accelerator(log_with="tensorboard", project_dir="./runs")
-    checkpoint_name = "model_redux_shakespeare"
+    checkpoint_name = "conditional_shakespeare"
     checkpoint_dir = "./checkpoints"
     batch_size = 256
     seq_len = 128
@@ -32,7 +32,7 @@ def main():
     train_ds = Ds(tk, seq_len, min_t=min_t)
     test_ds = Ds(tk, seq_len, min_t=min_t, train=False)
 
-    collate_fn = make_collate_fn(scheduler, vocab_size)
+    collate_fn = make_collate_fn(scheduler, vocab_size, tk.mask_idx())
 
     train_dl = DataLoader(
         train_ds,
@@ -50,11 +50,12 @@ def main():
     )
 
     model = Model(
-        max_seq_len=seq_len,
+        dec_max_seq_len=seq_len,
+        enc_max_seq_len=seq_len,
         K=vocab_size,
         hidden_dim=hidden_size,
         num_heads=heads,
-        layers=layers,
+        decoder_layers=layers,
         dropout=0.1,
     )
 
@@ -82,6 +83,7 @@ def main():
         save_every=5_000,
         test_inference_steps=100,
         save_dir=checkpoint_dir,
+        grad_clip=1.0,
     )
 
     context.load(ignore_missing=True)

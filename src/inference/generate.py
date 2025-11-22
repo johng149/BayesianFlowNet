@@ -88,6 +88,7 @@ def inference(
     batch_size: int,
     seq_len: int,
     K: int,
+    encoder_model_input: Tensor,
     device: torch.device,
     dtype: torch.dtype = torch.float32,
     conditioning_callback: Callable[[Tensor], Tensor] | None = None,
@@ -107,7 +108,7 @@ def inference(
             print(f"Step {i}: {tk.decode(torch.argmax(current, dim=-1)[0].cpu())}")
         current_iteration = torch.ones_like(total_iterations) * i
         curr_t = dis_t(current_iteration, total_iterations)
-        output = model(current, curr_t)
+        output = model(current, curr_t, encoder_model_input)
         if conditioning_callback is not None:
             output = conditioning_callback(output)
         current = bayesian_inference(

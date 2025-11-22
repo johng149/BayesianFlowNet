@@ -50,3 +50,25 @@ def half_callback_maker(
         return prediction[~expanded_mask].view(batch_size, -1, K)
 
     return callback, masker
+
+
+def no_op_callback_maker(
+    ground_truth: Tensor,
+) -> Tuple[Callable[[Tensor], Tensor], Callable[[Tensor], Tensor]]:
+    """
+    Create a no-op callback that does not modify the model's prediction.
+
+    Args:
+        - ground_truth (Tensor) Ground truth tensor of shape (batch_size, seq_len, K), used
+            for signature consistency only.
+    Returns:
+        Callable[[Tensor], Tensor]: A no-op callback function.
+    """
+
+    def callback(model_prediction: Tensor) -> Tensor:
+        return model_prediction
+
+    def masker(prediction: Tensor) -> Tensor:
+        return prediction
+
+    return callback, masker
