@@ -5,7 +5,10 @@ from src.schedule.base import ScheduleOutput
 
 
 def loss(
-    scheduler_output: ScheduleOutput, target: Tensor, model_output_logits: Tensor
+    scheduler_output: ScheduleOutput,
+    target: Tensor,
+    model_output_logits: Tensor,
+    mask: Tensor,
 ) -> Tensor:
     """
     Compute the loss given the scheduler output, target tensor, and model output logits.
@@ -15,6 +18,8 @@ def loss(
             for the current timestep. The alpha term should be of shape (batch_size,).
         - target (Tensor) Target tensor of shape (batch_size, seq_len, K)
         - model_output_logits (Tensor) Model output logits of shape (batch_size, seq_len, K)
+        - mask (Tensor) Mask tensor of shape (batch_size, seq_len). For every sequence position where mask is False,
+          the loss will not be computed
     Returns:
         Tensor: Computed loss.
     """
@@ -30,13 +35,9 @@ def loss(
     )
 
     model_output = torch.softmax(model_output_logits, dim=-1)
-    seq_normalized_loss = (
-        torch.sum((target - model_output) ** 2, dim=(-2, -1))
-        * 0.5
-        * K
-        * alpha
-        / seq_len
-    )
+    mse = (target - model_output) ** 2  # shape is (batch_size, seq_len, K)
+    mse = mse * mask.unsqueeze(-1)  # apply mask
+    seq_normalized_loss = torch.sum(mse, dim=(-2, -1)) * 0.5 * K * alpha / seq_len
     l_infty_loss = torch.mean(seq_normalized_loss)
 
     return l_infty_loss

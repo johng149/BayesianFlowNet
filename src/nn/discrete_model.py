@@ -89,17 +89,24 @@ class DiscreteModel(nn.Module):
     def positional_emb(self, x):
         return x + self.pos_emb[: x.shape[1]]
 
-    def time_emb(self, x, t):
+    def time_emb(self, x, t, mask):
         assert (
             t.ndim == 1
         ), f"time vector `t` should be vector of length batch_size. Got shape {t.shape} while x has shape {x.shape}"
-        time_embedding = self.time_mlp(t)
-        return x + time_embedding.unsqueeze(1)
+        time_embedding = self.time_mlp(t)  # shape is (batch_size, hidden_dim)
 
-    def forward(self, x, t):
+        # time embedding only applies to masked (noisy) positions
+        return x + mask.unsqueeze(-1) * time_embedding.unsqueeze(1)
+
+    def forward(self, x, t, mask):
+        batch_size, seq_len, K = x.shape
+        assert mask.shape == (
+            batch_size,
+            seq_len,
+        ), f"mask shape {mask.shape} does not match input shape {x.shape}"
         x = self.token_emb(x)
         x = self.positional_emb(x)
-        x = self.time_emb(x, t)
+        x = self.time_emb(x, t, mask)
         for i, l in enumerate(self.layers):
             x = l(x)
         pred = x @ self.classifier

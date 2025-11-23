@@ -16,7 +16,7 @@ from src.training.train import train
 
 def main():
     accelerator = Accelerator(log_with="tensorboard", project_dir="./runs")
-    checkpoint_name = "model_redux_shakespeare"
+    checkpoint_name = "model_conditional"
     checkpoint_dir = "./checkpoints"
     batch_size = 256
     seq_len = 128

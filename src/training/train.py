@@ -149,11 +149,12 @@ def train_step(context: TrainingContext, current_epoch: int):
 
     model_input = batch["model_input"]
     t = batch["t"]
+    mask = batch["mask"]
     ground_truth = batch["ground_truth"]
     scheduler_output = batch["scheduler_output"]
-    prediction = model(model_input, t)
+    prediction = model(model_input, t, mask)
     optim.zero_grad()
-    l = loss(scheduler_output, ground_truth, prediction)
+    l = loss(scheduler_output, ground_truth, prediction, mask)
     context.accelerator.backward(l)
     optim.step()
     if lr_scheduler is not None:
@@ -173,10 +174,9 @@ def test_step(context: TrainingContext, current_epoch: int):
     t = batch["t"]
     ground_truth = batch["ground_truth"]
     scheduler_output = batch["scheduler_output"]
+    mask = batch["mask"]
 
     batch_size, seq_len, K = model_input.shape
-
-    callback, masker = half_callback_maker(ground_truth)
 
     steps = context.test_inference_steps
 
@@ -187,17 +187,22 @@ def test_step(context: TrainingContext, current_epoch: int):
         batch_size,
         seq_len,
         K,
+        mask,
+        model_input,
         model_input.device,
         model_input.dtype,
-        conditioning_callback=callback,
     )
 
-    predicted = masker(inference_result)
-    target = masker(ground_truth)
-    accuracy = (predicted.argmax(dim=-1) == target.argmax(dim=-1)).float().mean().item()
+    # predicted = masker(inference_result)
+    # target = masker(ground_truth)
 
-    prediction = model(model_input, t)
-    l = loss(scheduler_output, ground_truth, prediction)
+    # we only care about accuracy for masked positions
+    match = inference_result.argmax(dim=-1) == ground_truth.argmax(dim=-1)
+
+    accuracy = match[mask].float().mean().item()
+
+    prediction = model(model_input, t, mask)
+    l = loss(scheduler_output, ground_truth, prediction, mask)
 
     context.log("test/loss", l.item(), current_epoch)
     context.log("test/accuracy", accuracy, current_epoch)

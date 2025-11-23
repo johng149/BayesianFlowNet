@@ -88,11 +88,14 @@ def inference(
     batch_size: int,
     seq_len: int,
     K: int,
+    mask: Tensor,
+    masked_input: Tensor,
     device: torch.device,
     dtype: torch.dtype = torch.float32,
     conditioning_callback: Callable[[Tensor], Tensor] | None = None,
     tk: TokenizerBase | None = None,
 ):
+    # mask shape should be batch_size x seq_len while mask_input has shape batch_size x seq_len x K
     total_iterations = torch.ones(batch_size, device=device) * num_steps
     current = generative_prior(
         batch_size=batch_size,
@@ -102,12 +105,14 @@ def inference(
         dtype=dtype,
     )
 
+    current = torch.where(mask.unsqueeze(-1), current, masked_input)
+
     for i in range(1, num_steps + 1):
         if tk is not None and (i % (num_steps // 10) == 0 or i == num_steps):
             print(f"Step {i}: {tk.decode(torch.argmax(current, dim=-1)[0].cpu())}")
         current_iteration = torch.ones_like(total_iterations) * i
         curr_t = dis_t(current_iteration, total_iterations)
-        output = model(current, curr_t)
+        output = model(current, curr_t, mask)
         if conditioning_callback is not None:
             output = conditioning_callback(output)
         current = bayesian_inference(
@@ -117,6 +122,23 @@ def inference(
             n=total_iterations,
             scheduler=scheduler,
         )
+        current = torch.where(mask.unsqueeze(-1), current, masked_input)
     final_t = torch.ones_like(total_iterations)
-    final_output_logits = model(current, final_t)
-    return final_output_logits
+    final_output_logits = model(current, final_t, mask)
+
+    # for each sequence position in the masked_input, it is either a one-hot vector (if unmasked)
+    # or a noisy vector (if masked). For generation, we want to keep the unmasked positions as is
+    # and only replace the masked positions with the model's output
+
+    # first, we get the tokens with argmax
+    tokens = torch.argmax(masked_input, dim=-1)  # shape is (batch_size, seq_len)
+
+    # since we are working in logit space, this means we create a matrix of shape (batch_size, seq_len, K)
+    # where everything is -inf except for the position of the token which is 0
+    unmasked_logits = torch.full_like(final_output_logits, fill_value=float("-inf"))
+
+    # to identify which tokens are the unmasked ones, we consult the mask, so for every sequence position
+    # where mask is false, we use unmasked_logits, otherwise we use final_output_logits
+    unmasked_logits.scatter_(dim=-1, index=tokens.unsqueeze(-1), value=0.0)
+    final_logits = torch.where(mask.unsqueeze(-1), final_output_logits, unmasked_logits)
+    return final_logits
