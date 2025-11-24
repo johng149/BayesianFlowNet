@@ -2,9 +2,10 @@ from typing import Callable, NewType
 
 import torch
 from torch import Tensor
-from torch.distributions import Categorical
+from torch.distributions import Categorical as TorchCategorical
 from torch.nn import Module
 from torch.nn import functional as F
+from tqdm.auto import tqdm
 
 from src.common.data_prep import accuracy, dis_t, sample_model_output, theta, y
 from src.schedule.base import Scheduler
@@ -81,6 +82,355 @@ def generative_prior(
     return theta(uniform)
 
 
+class TextBFNSolver:
+    def __init__(
+        self,
+        unet: torch.nn.Module,
+        class_num: int = 27,
+        num_steps: int = 100,
+        max_sqrt_beta: float = 0.75,
+        eta: float = 1e-5,
+        callback=None,
+    ):
+        self.unet = unet
+        self.eta = eta
+        self.callback = callback
+
+        self.max_sqrt_beta = max_sqrt_beta
+        self.K = class_num
+
+        self.num_steps = num_steps
+        self.steps = torch.flip(torch.arange(num_steps + 1), [0])
+        self.times = self.steps.to(torch.float64) / num_steps * (1 - eta)
+        self.delta_t = (1 - eta) / num_steps
+
+        # f g
+        self.f_t = -2 / (1 - self.times)
+        self.g_t = (2 * self.K * (1 - self.times)) ** 0.5 * self.max_sqrt_beta
+
+        # beta alpha
+        self.beta_t = (self.max_sqrt_beta * (1 - self.times)) ** 2
+        self.alpha_t = 2 * (1 - self.times) * self.max_sqrt_beta**2
+
+    def sde_euler_update(
+        self,
+        x_s,
+        step,
+        mask,
+        model_input,
+        last_drop=False,
+        cate_samp=False,
+        addi_step=False,
+    ):
+        # x_s -> x_t
+        t = torch.ones(x_s.shape[0], device=x_s.device) * (1 - self.times[step])
+
+        g = self.g_t[step]
+
+        noise = torch.randn_like(x_s, device=x_s.device)
+
+        with torch.no_grad():
+            theta = F.softmax(x_s, -1)
+            theta = torch.where(mask.unsqueeze(-1), theta, model_input)
+            logits = self.unet(theta, t, mask)
+            if self.callback is not None:
+                logits = self.callback(logits)
+            data_pred = F.softmax(logits, -1)
+            if cate_samp == True:
+                categorical = TorchCategorical(logits=logits, validate_args=False)
+                data_pred = categorical.sample()
+                data_pred = F.one_hot(data_pred.long(), self.K)
+
+            if last_drop == True and step == self.num_steps - 1:
+                return logits, data_pred
+            elif addi_step == True and step == self.num_steps - 1:
+                x_t = (
+                    x_s
+                    + g**2 * (data_pred - 1 / self.K) * self.delta_t
+                    + g * self.delta_t**0.5 * noise
+                )
+                theta = F.softmax(x_t, -1)
+                t = torch.ones(x_s.shape[0], device=x_s.device) * (
+                    1 - self.times[step + 1]
+                )
+                theta = torch.where(mask.unsqueeze(-1), theta, model_input)
+                logits = self.unet(theta, t, mask)
+                data_pred = F.softmax(logits, -1)
+                return logits, data_pred
+            else:
+                x_t = (
+                    x_s
+                    + g**2 * (data_pred - 1 / self.K) * self.delta_t
+                    + g * self.delta_t**0.5 * noise
+                )
+                return logits, data_pred
+
+    def ode_euler_update(
+        self,
+        x_s,
+        step,
+        mask,
+        model_input,
+        last_drop=False,
+        cate_samp=False,
+        addi_step=False,
+    ):
+        # x_s -> x_t
+        t = torch.ones(x_s.shape[0], device=x_s.device) * (1 - self.times[step])
+
+        f = self.f_t[step]
+        g = self.g_t[step]
+        beta_s = self.beta_t[step]
+
+        with torch.no_grad():
+            theta = F.softmax(x_s, -1)
+            theta = torch.where(mask.unsqueeze(-1), theta, model_input)
+            logits = self.unet(theta, t, mask)
+            data_pred = F.softmax(logits, -1)
+            if cate_samp == True:
+                categorical = TorchCategorical(logits=logits, validate_args=False)
+                data_pred = categorical.sample()
+                data_pred = F.one_hot(data_pred.long(), self.K)
+            if last_drop == True and step == self.num_steps - 1:
+                return logits, data_pred
+            elif addi_step == True and step == self.num_steps - 1:
+                x_t = (
+                    x_s
+                    - (
+                        (f + (g**2) / (2 * self.K * beta_s)) * x_s
+                        - 0.5 * g**2 * (data_pred - 1 / self.K)
+                    )
+                    * self.delta_t
+                )
+                theta = F.softmax(x_t, -1)
+                t = torch.ones(x_s.shape[0], device=x_s.device) * (
+                    1 - self.times[step + 1]
+                )
+                theta = torch.where(mask.unsqueeze(-1), theta, model_input)
+                logits = self.unet(theta, t, mask)
+                data_pred = F.softmax(logits, -1)
+                return logits, data_pred
+            else:
+                x_t = (
+                    x_s
+                    - (
+                        (f + (g**2) / (2 * self.K * beta_s)) * x_s
+                        - 0.5 * g**2 * (data_pred - 1 / self.K)
+                    )
+                    * self.delta_t
+                )
+                return x_t, data_pred
+
+    def ode_bfnsolver1_update(self, x_s, step, mask, model_input, last_drop=False):
+        # x_s -> x_t
+        t = torch.ones(x_s.shape[0], device=x_s.device) * (1 - self.times[step])
+        t_t, t_s = self.times[step + 1], self.times[step]
+        c_t = self.K * self.max_sqrt_beta**2 * (1 - t_t)
+        with torch.no_grad():
+            theta = F.softmax(x_s, -1)
+            theta = torch.where(mask.unsqueeze(-1), theta, model_input)
+            logits = self.unet(theta, t, mask)
+            data_pred = F.softmax(logits, -1)
+
+            if last_drop == True and step == self.num_steps - 1:
+                return logits, data_pred
+            else:
+                x_t = (1 - t_t) / (1 - t_s) * x_s + c_t * (t_t - t_s) * (
+                    1 / self.K - data_pred
+                )
+                return x_t, data_pred
+
+    def ode_bfnsolver2_multi_step_update(
+        self, x_s, step, mask, model_input, data_pred_last=None, last_drop=False
+    ):
+        t = torch.ones(x_s.shape[0], device=x_s.device) * (1 - self.times[step])
+        t_t, t_s = self.times[step + 1], self.times[step]
+        c_t = self.K * self.max_sqrt_beta**2 * (1 - t_t)
+        with torch.no_grad():
+            theta = F.softmax(x_s, -1)
+            theta = torch.where(mask.unsqueeze(-1), theta, model_input)
+            logits = self.unet(theta, t, mask)
+            if self.callback is not None:
+                logits = self.callback(logits)
+            data_pred = F.softmax(logits, -1)
+            if step == 0:
+                x_t = (1 - t_t) / (1 - t_s) * x_s + c_t * (t_t - t_s) * (
+                    1 / self.K - data_pred
+                )
+                return x_t, data_pred
+            elif last_drop == True and step == self.num_steps - 1:
+                return logits, data_pred
+            else:
+                assert isinstance(data_pred_last, Tensor)
+                t_r = self.times[step - 1]
+                # x_t = x_s +
+                A = (1 - t_t) / (1 - t_s) * x_s + c_t / self.K * (t_t - t_s)
+                B = -c_t * (t_t - t_s) * data_pred
+                D1 = (data_pred - data_pred_last) / (t_s - t_r)
+                C = -c_t * (t_t - t_s) ** 2 / 2 * D1
+                x_t = A + B + C
+                return A + B + C, data_pred
+
+    def ode_bfnsolver2_single_step_update(
+        self, x_s, step, mask, model_input, last_drop=False
+    ):
+        # x_s -> x_t
+        t = torch.ones(x_s.shape[0], device=x_s.device) * (1 - self.times[step])
+        t_t, t_s = self.times[step + 1], self.times[step]
+        t_r = (t_t + t_s) / 2
+        c_r = self.K * self.max_sqrt_beta**2 * (1 - t_r)
+        c_t = self.K * self.max_sqrt_beta**2 * (1 - t_t)
+
+        with torch.no_grad():
+            theta = F.softmax(x_s, -1)
+            theta = torch.where(mask.unsqueeze(-1), theta, model_input)
+            logits = self.unet(theta, t, mask)
+            if self.callback is not None:
+                logits = self.callback(logits)
+            data_pred_s = F.softmax(logits, -1)
+
+            # x_r
+            x_r = (1 - t_r) / (1 - t_s) * x_s + c_r * (t_r - t_s) * (
+                1 / self.K - data_pred_s
+            )
+            t = torch.ones(x_s.shape[0], device=x_s.device) * (1 - t_r)
+            theta = F.softmax(x_r, -1)
+            theta = torch.where(mask.unsqueeze(-1), theta, model_input)
+            logits = self.unet(theta, t, mask)
+            data_pred_r = F.softmax(logits, -1)
+            if last_drop == True and step == self.num_steps - 1:
+                return logits, data_pred_r
+            else:
+                A = (1 - t_t) / (1 - t_s) * x_s + c_t / self.K * (t_t - t_s)
+                B = -c_t * (t_t - t_s) * data_pred_s
+                D1 = (data_pred_r - data_pred_s) / (t_r - t_s)
+                C = -c_t * (t_t - t_s) ** 2 / 2 * D1
+                x_t = A + B + C
+                return x_t, data_pred_r
+
+    def sde_bfnsolver2_multi_step_update(
+        self, x_s, step, mask, model_input, data_pred_last=None, last_drop=False
+    ):
+        t = torch.ones(x_s.shape[0], device=x_s.device) * (1 - self.times[step])
+        t_t, t_s = self.times[step + 1], self.times[step]
+        beta_s = self.max_sqrt_beta**2 * (1 - t_s) ** 2
+        beta_t = self.max_sqrt_beta**2 * (1 - t_t) ** 2
+        with torch.no_grad():
+            theta = F.softmax(x_s, -1)
+            theta = torch.where(mask.unsqueeze(-1), theta, model_input)
+            logits = self.unet(theta, t, mask)
+            if self.callback is not None:
+                logits = self.callback(logits)
+            data_pred_s = F.softmax(logits, -1)
+            if step == 0:
+                noise = torch.randn_like(x_s, device=x_s.device)
+                x_t = (
+                    x_s
+                    + (beta_t - beta_s) * (self.K * data_pred_s - 1)
+                    + (self.K * (beta_t - beta_s)) ** 0.5 * noise
+                )
+                return x_t, data_pred_s
+            elif last_drop == True and step == self.num_steps - 1:
+                return logits, data_pred_s
+            else:
+                assert isinstance(data_pred_last, Tensor)
+                noise = torch.randn_like(x_s, device=x_s.device)
+                t_r = self.times[step - 1]
+                D1 = (data_pred_last - data_pred_s) / (t_r - t_s)
+                # x_t_ = x_s + (beta_t - beta_s) * (self.K * data_pred_s - 1)\
+                #     + (2*self.K*self.max_sqrt_beta**2*( ((t_t**2)/2 - (t_t**3)/3) - ((t_s**2)/2-(t_s**3)/3 ) ) + t_s * self.K * (beta_t - beta_s)) * D1 \
+                #         + (self.K * (beta_t - beta_s))**0.5 * noise
+
+                x_t = (
+                    x_s
+                    + (beta_t - beta_s) * (self.K * data_pred_s - 1)
+                    + 1
+                    / 3
+                    * self.K
+                    * self.max_sqrt_beta**2
+                    * (t_t - t_s) ** 2
+                    * (t_s + 2 * t_t - 3)
+                    * D1
+                    + (self.K * (beta_t - beta_s)) ** 0.5 * noise
+                )
+                return x_t, data_pred_s
+
+    def sde_bfnsolver1_update(
+        self, x_s, step, mask, model_input, last_drop=False, cate_samp=False
+    ):
+        t = torch.ones(x_s.shape[0], device=x_s.device) * (1 - self.times[step])
+        t_t, t_s = self.times[step + 1], self.times[step]
+        beta_s = self.max_sqrt_beta**2 * (1 - t_s) ** 2
+        beta_t = self.max_sqrt_beta**2 * (1 - t_t) ** 2
+        with torch.no_grad():
+            theta = F.softmax(x_s, -1)
+            theta = torch.where(mask.unsqueeze(-1), theta, model_input)
+            logits = self.unet(theta, t, mask)
+            if self.callback is not None:
+                logits = self.callback(logits)
+            data_pred = F.softmax(logits, -1)
+            if cate_samp == True:
+                data_pred = TorchCategorical(
+                    logits=logits, validate_args=False
+                ).sample()
+                data_pred = F.one_hot(data_pred, self.K).to(torch.float32)
+            if last_drop == True and step == self.num_steps - 1:
+                return logits, data_pred
+            else:
+                noise = torch.randn_like(x_s, device=x_s.device)
+                x_t = (
+                    x_s
+                    + (beta_t - beta_s) * (self.K * data_pred - 1)
+                    + (self.K * (beta_t - beta_s)) ** 0.5 * noise
+                )
+                return x_t, data_pred
+
+
+def sample(
+    solver: TextBFNSolver,
+    batch_size,
+    seq_len,
+    K,
+    mask,
+    model_input,
+    device,
+    steps: int = 100,
+    algorithm: str = "sde_euler",
+    tk: TokenizerBase | None = None,
+):
+    beta_t = (solver.max_sqrt_beta * solver.eta) ** 2
+    std_t = (K * beta_t) ** 0.5
+    prior = torch.randn(batch_size, seq_len, K, device=device) * std_t
+    xt = prior
+    data_pred_last = None
+    for step in range(steps):
+        if algorithm == "sde_euler":
+            xt, _ = solver.sde_euler_update(xt, step, mask, model_input)
+        elif algorithm == "ode_euler":
+            xt, _ = solver.ode_euler_update(xt, step, mask, model_input)
+        elif algorithm == "ode_bfnsolver1":
+            xt, _ = solver.ode_bfnsolver1_update(xt, step, mask, model_input)
+        elif algorithm == "ode_bfnsolver2_single_step":
+            xt, _ = solver.ode_bfnsolver2_single_step_update(
+                xt, step, mask, model_input
+            )
+        elif algorithm == "ode_bfnsolver2_multi_step":
+            xt, data_pred_last = solver.ode_bfnsolver2_multi_step_update(
+                xt, step, mask, model_input, data_pred_last
+            )
+        elif algorithm == "sde_bfnsolver1":
+            xt, _ = solver.sde_bfnsolver1_update(xt, step, mask, model_input)
+        elif algorithm == "sde_bfnsolver2_multi_step":
+            xt, data_pred_last = solver.sde_bfnsolver2_multi_step_update(
+                xt, step, mask, model_input, data_pred_last
+            )
+        else:
+            raise NotImplementedError
+        if tk is not None and (step % (steps // 10) == 0 or step == steps - 1):
+            print(f"Step {step + 1}: {tk.decode(torch.argmax(xt, dim=-1)[0].cpu())}")
+    return xt
+
+
 def inference(
     model: Module,
     scheduler: Scheduler,
@@ -92,53 +442,21 @@ def inference(
     masked_input: Tensor,
     device: torch.device,
     dtype: torch.dtype = torch.float32,
-    conditioning_callback: Callable[[Tensor], Tensor] | None = None,
     tk: TokenizerBase | None = None,
 ):
-    # mask shape should be batch_size x seq_len while mask_input has shape batch_size x seq_len x K
-    total_iterations = torch.ones(batch_size, device=device) * num_steps
-    current = generative_prior(
-        batch_size=batch_size,
-        seq_len=seq_len,
-        K=K,
-        device=device,
-        dtype=dtype,
+    solver = TextBFNSolver(
+        model, class_num=K, num_steps=num_steps, max_sqrt_beta=(20.4054 / K) ** 0.5
     )
-
-    current = torch.where(mask.unsqueeze(-1), current, masked_input)
-
-    for i in range(1, num_steps + 1):
-        if tk is not None and (i % (num_steps // 10) == 0 or i == num_steps):
-            print(f"Step {i}: {tk.decode(torch.argmax(current, dim=-1)[0].cpu())}")
-        current_iteration = torch.ones_like(total_iterations) * i
-        curr_t = dis_t(current_iteration, total_iterations)
-        output = model(current, curr_t, mask)
-        if conditioning_callback is not None:
-            output = conditioning_callback(output)
-        current = bayesian_inference(
-            model_input=current,
-            model_output_logits=output,
-            i=current_iteration,
-            n=total_iterations,
-            scheduler=scheduler,
-        )
-        current = torch.where(mask.unsqueeze(-1), current, masked_input)
-    final_t = torch.ones_like(total_iterations)
-    final_output_logits = model(current, final_t, mask)
-
-    # for each sequence position in the masked_input, it is either a one-hot vector (if unmasked)
-    # or a noisy vector (if masked). For generation, we want to keep the unmasked positions as is
-    # and only replace the masked positions with the model's output
-
-    # first, we get the tokens with argmax
-    tokens = torch.argmax(masked_input, dim=-1)  # shape is (batch_size, seq_len)
-
-    # since we are working in logit space, this means we create a matrix of shape (batch_size, seq_len, K)
-    # where everything is -inf except for the position of the token which is 0
-    unmasked_logits = torch.full_like(final_output_logits, fill_value=float("-inf"))
-
-    # to identify which tokens are the unmasked ones, we consult the mask, so for every sequence position
-    # where mask is false, we use unmasked_logits, otherwise we use final_output_logits
-    unmasked_logits.scatter_(dim=-1, index=tokens.unsqueeze(-1), value=0.0)
-    final_logits = torch.where(mask.unsqueeze(-1), final_output_logits, unmasked_logits)
-    return final_logits
+    xt = sample(
+        solver,
+        batch_size,
+        seq_len,
+        K,
+        mask,
+        masked_input,
+        device,
+        steps=num_steps,
+        algorithm="sde_euler",
+        tk=tk,
+    )
+    return xt

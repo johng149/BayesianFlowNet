@@ -181,16 +181,16 @@ def test_step(context: TrainingContext, current_epoch: int):
     steps = context.test_inference_steps
 
     inference_result = inference(
-        model,
-        scheduler,
-        steps,
-        batch_size,
-        seq_len,
-        K,
-        mask,
-        model_input,
-        model_input.device,
-        model_input.dtype,
+        model=model,
+        scheduler=scheduler,
+        num_steps=steps,
+        batch_size=batch_size,
+        seq_len=seq_len,
+        K=K,
+        mask=mask,
+        masked_input=model_input,
+        device=model_input.device,
+        dtype=model_input.dtype,
     )
 
     # predicted = masker(inference_result)

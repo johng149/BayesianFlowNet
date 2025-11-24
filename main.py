@@ -9,14 +9,14 @@ from src.datasets.dataset_helper import make_collate_fn
 from src.datasets.shakespeare.shakespeare import ShakespeareDataset as Ds
 from src.nn.discrete_model import DiscreteModel as Model
 from src.schedule.vanilla import VanillaScheduler as Scheduler
-from src.tokenizers.character_level.character_level import CharacterLevelTokenizer as Tk
+from src.tokenizers.byte.byte import ByT5Tokenizer as Tk
 from src.training.train import TrainingContext as Context
 from src.training.train import train
 
 
 def main():
     accelerator = Accelerator(log_with="tensorboard", project_dir="./runs")
-    checkpoint_name = "model_conditional"
+    checkpoint_name = "shakespeare_byt5"
     checkpoint_dir = "./checkpoints"
     batch_size = 256
     seq_len = 128
@@ -78,7 +78,7 @@ def main():
         train_loader=train_dl,
         test_loader=test_dl,
         target_epochs=15_000_000,
-        test_every=4_000,
+        test_every=5_100,
         save_every=5_000,
         test_inference_steps=100,
         save_dir=checkpoint_dir,
