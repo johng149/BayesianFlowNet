@@ -20,6 +20,7 @@ dependencies = [
     "tensorboard>=2.20.0",
     "accelerate>=1.10.1",
     "matplotlib>=3.10.7",
+    "h-net-dynamic-chunking>=0.3.0",
 ]
 
 [tool.pyright]

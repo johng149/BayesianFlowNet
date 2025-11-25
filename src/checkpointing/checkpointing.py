@@ -29,7 +29,7 @@ def save_checkpoint(
     accelerator.wait_for_everyone()
     save_path = Path(path)
     save_path.parent.mkdir(parents=True, exist_ok=True)
-    accelerator.save_state(str(save_path))
+    accelerator.save_state(str(save_path), safe_serialization=False)
 
     if accelerator.is_main_process:
         metadata = {
