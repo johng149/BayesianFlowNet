@@ -23,6 +23,8 @@ dependencies = [
     "h-net-dynamic-chunking>=0.3.0",
     "flash-linear-attention>=0.4.0",
     "triton==3.2.0",
+    "causal-conv1d>=1.5.3.post1",
+    "mamba-ssm[causal-conv1d]>=2.2.6.post3",
 ]
 
 [tool.pyright]
