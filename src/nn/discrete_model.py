@@ -1,7 +1,12 @@
 import math
 
 import torch
+from mamba_ssm import Mamba2
 from torch import nn
+from torch.nn.attention.flex_attention import create_block_mask
+
+from src.nn.chunker import PackDynamicSequenceChunker
+from src.nn.flex_transformer import TransformerBlock, causal, generate_doc_mask_mod
 
 
 class SinusoidalTimeEmbedding(nn.Module):
@@ -14,9 +19,30 @@ class SinusoidalTimeEmbedding(nn.Module):
         half_dim = self.dim // 2
         emb = math.log(10000) / (half_dim - 1)
         emb = torch.exp(torch.arange(half_dim, device=device, dtype=t.dtype) * -emb)
-        emb = t[:, None] * emb[None, :]
+        emb = t.unsqueeze(-1) * emb[None, :]
         emb = torch.cat((emb.sin(), emb.cos()), dim=-1)
         return emb
+
+
+def mamba_check(hidden_dim, num_heads, mamba_expand):
+    headdim = hidden_dim // num_heads
+    if (hidden_dim * mamba_expand / headdim) % 8 != 0:
+        gcd = math.gcd(mamba_expand, 8)
+        step = 8 // gcd
+        n_low = (num_heads // step) * step
+        n_high = n_low + step
+        candidates = [n for n in [n_low, n_high] if n > 0]
+        suggestions = []
+        for n in candidates:
+            h = int(round(hidden_dim / n) * n)
+            suggestions.append((h, n))
+        suggestions.sort(key=lambda x: (abs(x[0] - hidden_dim), abs(x[1] - num_heads)))
+        best_h, best_n = suggestions[0]
+        raise ValueError(
+            f"Mamba packed sequence constraint failed: (hidden_dim * expand / headdim) % 8 != 0.\n"
+            f"Current: hidden_dim={hidden_dim}, num_heads={num_heads}, expand={mamba_expand}.\n"
+            f"Suggested fix: hidden_dim={best_h}, num_heads={best_n}."
+        )
 
 
 class DiscreteModel(nn.Module):
@@ -26,38 +52,63 @@ class DiscreteModel(nn.Module):
         K: int,
         hidden_dim: int,
         num_heads: int,
+        mamba_expand: int = 2,
         layers: int = 3,
         dropout: float = 0.1,
     ):
         super().__init__()
+        mamba_check(hidden_dim, num_heads, mamba_expand)
         assert hidden_dim % num_heads == 0, "hidden_dim must be divisble by num_heads"
+        self.headdim = hidden_dim // num_heads
+
         self.num_layers = layers
         self.emb = nn.Parameter(torch.randn(K, hidden_dim) * 0.02)
         self.pos_emb = nn.Parameter(torch.randn(max_seq_len, hidden_dim) * 0.02)
+        self.time_rotary = SinusoidalTimeEmbedding(hidden_dim)
         self.time_mlp = nn.Sequential(
-            SinusoidalTimeEmbedding(hidden_dim),
             nn.Linear(hidden_dim, hidden_dim),
             nn.GELU(),
             nn.Linear(hidden_dim, hidden_dim),
         )
-        self.layers = nn.ModuleList(
+
+        # Pre-chunk Mamba
+        self.mamba_pre = Mamba2(
+            d_model=hidden_dim,
+            headdim=self.headdim,
+            d_state=16,
+            d_conv=4,
+            expand=mamba_expand,
+        )
+
+        # Chunker
+        self.chunker = PackDynamicSequenceChunker(dim=hidden_dim)
+
+        # Main Transformer (Flex Attention)
+        self.transformer_blocks = nn.ModuleList(
             [
-                nn.TransformerEncoderLayer(
+                TransformerBlock(
                     hidden_dim,
-                    num_heads,
-                    hidden_dim * 4,
-                    dropout,
-                    batch_first=True,
-                    norm_first=True,
-                    bias=False,
+                    heads=num_heads,
+                    dim_head=self.headdim,
+                    num_layers=layers,  # used for weight init scaling
+                    dropout=dropout,
                 )
-                for i in range(layers)
+                for _ in range(layers)
             ]
         )
+
+        # Post-chunk Mamba
+        self.mamba_post = Mamba2(
+            d_model=hidden_dim,
+            headdim=self.headdim,
+            d_state=16,
+            d_conv=4,
+            expand=mamba_expand,
+        )
+
         self.classifier = nn.Parameter(torch.randn(hidden_dim, K) * 0.02)
 
         self.apply(self._init_weights)
-        self._residual_scaling()
 
     def _init_weights(self, module):
         if isinstance(module, nn.Linear):
@@ -65,50 +116,79 @@ class DiscreteModel(nn.Module):
             if module.bias is not None:
                 torch.nn.init.zeros_(module.bias)
 
-    def _residual_scaling(self):
-        scale = 0.02 / (2 * self.num_layers) ** 0.5
-        for layer in self.layers:
-            if isinstance(layer, nn.TransformerEncoderLayer):
-                # 1. MLP output projection (linear2)
-                torch.nn.init.normal_(layer.linear2.weight, mean=0.0, std=scale)
-                if layer.linear2.bias is not None:
-                    torch.nn.init.zeros_(layer.linear2.bias)
-
-                # 2. Attention output projection (self_attn.out_proj)
-                # nn.MultiheadAttention stores the output projection in `out_proj`
-                if hasattr(layer.self_attn, "out_proj"):
-                    torch.nn.init.normal_(
-                        layer.self_attn.out_proj.weight, mean=0.0, std=scale
-                    )
-                    if layer.self_attn.out_proj.bias is not None:
-                        torch.nn.init.zeros_(layer.self_attn.out_proj.bias)
-
     def token_emb(self, x):
         return x @ self.emb
 
     def positional_emb(self, x):
-        return x + self.pos_emb[: x.shape[1]]
+        return x  # no-op for now, Mamba is recurrent and so should implicitly handle position
 
     def time_emb(self, x, t, mask):
         assert (
-            t.ndim == 1
-        ), f"time vector `t` should be vector of length batch_size. Got shape {t.shape} while x has shape {x.shape}"
-        time_embedding = self.time_mlp(t)  # shape is (batch_size, hidden_dim)
+            t.ndim == 2 and t.shape[0] == x.shape[0] and t.shape[1] == x.shape[1]
+        ), f"time vector `t` should be vector of length (1, total_len). Got shape {t.shape} while x has shape {x.shape}"
 
-        # time embedding only applies to masked (noisy) positions
-        return x + mask.unsqueeze(-1) * time_embedding.unsqueeze(1)
+        # for all positions that are not masked, set time to 1 (no noise)
+        time_rotary = self.time_rotary(torch.where(mask == False, 1, t))
+        time_embedding = self.time_mlp(
+            time_rotary
+        )  # shape is (1, total_len, hidden_dim)
 
-    def forward(self, x, t, mask):
+        return x + time_embedding
+
+    def forward(self, x, t, mask, doc_ids):
         batch_size, seq_len, K = x.shape
         assert mask.shape == (
             batch_size,
             seq_len,
-        ), f"mask shape {mask.shape} does not match input shape {x.shape}"
+        ), f"mask shape {mask.shape} does not match input shape {x.shape} on the batch and seq len dimensions"
+        assert doc_ids.shape == (
+            batch_size,
+            seq_len,
+        ), f"doc_ids shape {doc_ids.shape} does not match input shape {x.shape} on the batch and seq len dimensions"
+
+        doc_ids = doc_ids.int()
+
+        unique_doc_ids, seq_lens = torch.unique_consecutive(doc_ids, return_counts=True)
+
         x = self.token_emb(x)
         x = self.positional_emb(x)
         x = self.time_emb(x, t, mask)
-        for i, l in enumerate(self.layers):
-            x = l(x)
+
+        # Mamba Pre
+        x = self.mamba_pre(x, seq_idx=doc_ids)
+
+        # Chunker
+        outputs, intermediates = self.chunker(
+            x.squeeze(0), seq_lens=seq_lens, return_intermediates=True
+        )
+        x_down = outputs.downsampled.unsqueeze(0)  # (1, total_len, D)
+
+        with torch.no_grad():
+            new_seq_lens = intermediates.new_seq_lens  # (Batch_Size,)
+            doc_ids_down = torch.repeat_interleave(unique_doc_ids, new_seq_lens)
+
+        # Generate mask
+        mask_mod = generate_doc_mask_mod(causal, doc_ids_down)
+        block_mask = create_block_mask(
+            mask_mod,
+            B=None,
+            H=None,
+            Q_LEN=x_down.shape[1],
+            KV_LEN=x_down.shape[1],
+            device=x.device,
+        )
+
+        for block in self.transformer_blocks:
+            x_down = block(x_down, block_mask)
+
+        packed_out = x_down.squeeze(0)  # (TotalChunks, D)
+
+        # Upsample via Chunker
+        x_up = outputs.upsample_fn(packed_out)  # (S, D)
+
+        # Mamba Post
+        x = self.mamba_post(x_up.unsqueeze(0), seq_idx=doc_ids)
+
         pred = x @ self.classifier
 
-        return pred
+        return pred, outputs.weighted_aux_ratio_loss

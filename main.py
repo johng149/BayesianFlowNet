@@ -1,6 +1,6 @@
 from sched import scheduler
 
-from accelerate import Accelerator
+from accelerate import Accelerator, DistributedDataParallelKwargs
 from torch.optim import AdamW as Opt
 from torch.optim.lr_scheduler import ReduceLROnPlateau as ReduceLR
 from torch.utils.data import DataLoader
@@ -15,8 +15,11 @@ from src.training.train import train
 
 
 def main():
-    accelerator = Accelerator(log_with="tensorboard", project_dir="./runs")
-    checkpoint_name = "shakespeare_byt5"
+    ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
+    accelerator = Accelerator(
+        log_with="tensorboard", project_dir="./runs", kwargs_handlers=[ddp_kwargs]
+    )
+    checkpoint_name = "shakespeare_byt5_hnet"
     checkpoint_dir = "./checkpoints"
     batch_size = 256
     seq_len = 128
@@ -62,7 +65,7 @@ def main():
         f"Created model with {sum(p.numel() for p in model.parameters())} parameters."
     )
 
-    opt = Opt(model.parameters(), lr=1e-4)
+    opt = Opt(model.parameters(), lr=1e-5)
 
     lr_plateau = (
         None  # ReduceLR(opt, mode="min", factor=0.5, patience=500, cooldown=50)

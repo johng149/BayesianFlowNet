@@ -17,6 +17,7 @@ CollateOutput = TypedDict(
         "model_input": Tensor,
         "mask": Tensor,
         "scheduler_output": ScheduleOutput,
+        "document_id": Tensor,
     },
 )
 
@@ -94,33 +95,64 @@ def make_collate_fn(
     """
 
     def collate_fn(batch: List[DatasetOutput]) -> CollateOutput:
-        x = [item["x"] for item in batch]
-        min_length = min(seq.shape[0] for seq in x)
-        x = [F.one_hot(seq[:min_length], num_classes=vocab_size) for seq in x]
-        x = torch.stack(x, dim=0)  # batch_size x seq_len x K
+        xs = [item["x"] for item in batch]
+        ts = [item["t"] for item in batch]
 
+        # Create document_ids and pack sequences
+        doc_ids = []
+        packed_x_list = []
+        packed_t_list = []
         masks = []
-        for _ in range(x.shape[0]):
-            r = np.random.uniform(min_mask_ratio, max_mask_ratio)
-            m = generate_span_mask(min_length, r, mean_span_length)
-            masks.append(m)
-        mask = torch.stack(masks, dim=0)  # batch_size x seq_len
 
-        t = torch.cat([item["t"] for item in batch], dim=0)  # batch_size,
-        scheduler_output = scheduler(t)
-        beta = scheduler_output["beta"]  # batch_size,
-        y_dist = y(x, beta)
+        for i, (x, t) in enumerate(zip(xs, ts)):
+            seq_len = x.shape[0]
+
+            # Document ID
+            doc_ids.append(torch.full((seq_len,), i, dtype=torch.long))
+
+            # X
+            packed_x_list.append(x)
+
+            # T (expand scalar t to seq_len)
+            packed_t_list.append(t.repeat(seq_len))
+
+            # Mask
+            r = np.random.uniform(min_mask_ratio, max_mask_ratio)
+            m = generate_span_mask(seq_len, r, mean_span_length)
+            masks.append(m)
+
+        # Concatenate everything
+        packed_x_indices = torch.cat(packed_x_list, dim=0)
+        packed_doc_ids = torch.cat(doc_ids, dim=0)
+        packed_t = torch.cat(packed_t_list, dim=0)
+        packed_mask = torch.cat(masks, dim=0)
+
+        # One-hot encode x
+        packed_x = F.one_hot(packed_x_indices, num_classes=vocab_size)
+
+        # Add batch dimension (1, total_len, ...)
+        packed_x = packed_x.unsqueeze(0)  # (1, total_len, vocab_size)
+        packed_doc_ids = packed_doc_ids.unsqueeze(0)  # (1, total_len)
+        packed_t = packed_t.unsqueeze(0)  # (1, total_len)
+        packed_mask = packed_mask.unsqueeze(0)  # (1, total_len)
+
+        # Scheduler and Noise
+        scheduler_output = scheduler(packed_t)
+        beta = scheduler_output["beta"]  # (1, total_len)
+
+        y_dist = y(packed_x, beta)
         model_input = theta(y_dist)
 
         # for each batch, for each sequence position, use `model_input` if mask is True else use `x`
-        model_input = torch.where(mask.unsqueeze(-1), model_input, x)
+        model_input = torch.where(packed_mask.unsqueeze(-1), model_input, packed_x)
 
         return {
-            "ground_truth": x,
-            "t": t,
+            "ground_truth": packed_x,
+            "t": packed_t,
             "model_input": model_input,
-            "mask": mask,
+            "mask": packed_mask,
             "scheduler_output": scheduler_output,
+            "document_id": packed_doc_ids,
         }
 
     return collate_fn

@@ -118,6 +118,7 @@ class TextBFNSolver:
         step,
         mask,
         model_input,
+        doc_ids,
         last_drop=False,
         cate_samp=False,
         addi_step=False,
@@ -132,7 +133,7 @@ class TextBFNSolver:
         with torch.no_grad():
             theta = F.softmax(x_s, -1)
             theta = torch.where(mask.unsqueeze(-1), theta, model_input)
-            logits = self.unet(theta, t, mask)
+            logits, _ = self.unet(theta, t, mask, doc_ids)
             if self.callback is not None:
                 logits = self.callback(logits)
             data_pred = F.softmax(logits, -1)
@@ -154,7 +155,7 @@ class TextBFNSolver:
                     1 - self.times[step + 1]
                 )
                 theta = torch.where(mask.unsqueeze(-1), theta, model_input)
-                logits = self.unet(theta, t, mask)
+                logits, _ = self.unet(theta, t, mask, doc_ids)
                 data_pred = F.softmax(logits, -1)
                 return logits, data_pred
             else:
@@ -171,6 +172,7 @@ class TextBFNSolver:
         step,
         mask,
         model_input,
+        doc_ids,
         last_drop=False,
         cate_samp=False,
         addi_step=False,
@@ -185,7 +187,7 @@ class TextBFNSolver:
         with torch.no_grad():
             theta = F.softmax(x_s, -1)
             theta = torch.where(mask.unsqueeze(-1), theta, model_input)
-            logits = self.unet(theta, t, mask)
+            logits, _ = self.unet(theta, t, mask, doc_ids)
             data_pred = F.softmax(logits, -1)
             if cate_samp == True:
                 categorical = TorchCategorical(logits=logits, validate_args=False)
@@ -207,7 +209,7 @@ class TextBFNSolver:
                     1 - self.times[step + 1]
                 )
                 theta = torch.where(mask.unsqueeze(-1), theta, model_input)
-                logits = self.unet(theta, t, mask)
+                logits, _ = self.unet(theta, t, mask, doc_ids)
                 data_pred = F.softmax(logits, -1)
                 return logits, data_pred
             else:
@@ -221,7 +223,9 @@ class TextBFNSolver:
                 )
                 return x_t, data_pred
 
-    def ode_bfnsolver1_update(self, x_s, step, mask, model_input, last_drop=False):
+    def ode_bfnsolver1_update(
+        self, x_s, step, mask, model_input, doc_ids, last_drop=False
+    ):
         # x_s -> x_t
         t = torch.ones(x_s.shape[0], device=x_s.device) * (1 - self.times[step])
         t_t, t_s = self.times[step + 1], self.times[step]
@@ -229,7 +233,7 @@ class TextBFNSolver:
         with torch.no_grad():
             theta = F.softmax(x_s, -1)
             theta = torch.where(mask.unsqueeze(-1), theta, model_input)
-            logits = self.unet(theta, t, mask)
+            logits, _ = self.unet(theta, t, mask, doc_ids)
             data_pred = F.softmax(logits, -1)
 
             if last_drop == True and step == self.num_steps - 1:
@@ -241,7 +245,14 @@ class TextBFNSolver:
                 return x_t, data_pred
 
     def ode_bfnsolver2_multi_step_update(
-        self, x_s, step, mask, model_input, data_pred_last=None, last_drop=False
+        self,
+        x_s,
+        step,
+        mask,
+        model_input,
+        doc_ids,
+        data_pred_last=None,
+        last_drop=False,
     ):
         t = torch.ones(x_s.shape[0], device=x_s.device) * (1 - self.times[step])
         t_t, t_s = self.times[step + 1], self.times[step]
@@ -249,7 +260,7 @@ class TextBFNSolver:
         with torch.no_grad():
             theta = F.softmax(x_s, -1)
             theta = torch.where(mask.unsqueeze(-1), theta, model_input)
-            logits = self.unet(theta, t, mask)
+            logits, _ = self.unet(theta, t, mask, doc_ids)
             if self.callback is not None:
                 logits = self.callback(logits)
             data_pred = F.softmax(logits, -1)
@@ -272,7 +283,7 @@ class TextBFNSolver:
                 return A + B + C, data_pred
 
     def ode_bfnsolver2_single_step_update(
-        self, x_s, step, mask, model_input, last_drop=False
+        self, x_s, step, mask, model_input, doc_ids, last_drop=False
     ):
         # x_s -> x_t
         t = torch.ones(x_s.shape[0], device=x_s.device) * (1 - self.times[step])
@@ -284,7 +295,7 @@ class TextBFNSolver:
         with torch.no_grad():
             theta = F.softmax(x_s, -1)
             theta = torch.where(mask.unsqueeze(-1), theta, model_input)
-            logits = self.unet(theta, t, mask)
+            logits, _ = self.unet(theta, t, mask, doc_ids)
             if self.callback is not None:
                 logits = self.callback(logits)
             data_pred_s = F.softmax(logits, -1)
@@ -296,7 +307,7 @@ class TextBFNSolver:
             t = torch.ones(x_s.shape[0], device=x_s.device) * (1 - t_r)
             theta = F.softmax(x_r, -1)
             theta = torch.where(mask.unsqueeze(-1), theta, model_input)
-            logits = self.unet(theta, t, mask)
+            logits, _ = self.unet(theta, t, mask, doc_ids)
             data_pred_r = F.softmax(logits, -1)
             if last_drop == True and step == self.num_steps - 1:
                 return logits, data_pred_r
@@ -309,7 +320,14 @@ class TextBFNSolver:
                 return x_t, data_pred_r
 
     def sde_bfnsolver2_multi_step_update(
-        self, x_s, step, mask, model_input, data_pred_last=None, last_drop=False
+        self,
+        x_s,
+        step,
+        mask,
+        model_input,
+        doc_ids,
+        data_pred_last=None,
+        last_drop=False,
     ):
         t = torch.ones(x_s.shape[0], device=x_s.device) * (1 - self.times[step])
         t_t, t_s = self.times[step + 1], self.times[step]
@@ -318,7 +336,7 @@ class TextBFNSolver:
         with torch.no_grad():
             theta = F.softmax(x_s, -1)
             theta = torch.where(mask.unsqueeze(-1), theta, model_input)
-            logits = self.unet(theta, t, mask)
+            logits, _ = self.unet(theta, t, mask, doc_ids)
             if self.callback is not None:
                 logits = self.callback(logits)
             data_pred_s = F.softmax(logits, -1)
@@ -356,7 +374,7 @@ class TextBFNSolver:
                 return x_t, data_pred_s
 
     def sde_bfnsolver1_update(
-        self, x_s, step, mask, model_input, last_drop=False, cate_samp=False
+        self, x_s, step, mask, model_input, doc_ids, last_drop=False, cate_samp=False
     ):
         t = torch.ones(x_s.shape[0], device=x_s.device) * (1 - self.times[step])
         t_t, t_s = self.times[step + 1], self.times[step]
@@ -365,7 +383,7 @@ class TextBFNSolver:
         with torch.no_grad():
             theta = F.softmax(x_s, -1)
             theta = torch.where(mask.unsqueeze(-1), theta, model_input)
-            logits = self.unet(theta, t, mask)
+            logits, _ = self.unet(theta, t, mask, doc_ids)
             if self.callback is not None:
                 logits = self.callback(logits)
             data_pred = F.softmax(logits, -1)
@@ -393,6 +411,7 @@ def sample(
     K,
     mask,
     model_input,
+    doc_ids,
     device,
     steps: int = 100,
     algorithm: str = "sde_euler",
@@ -405,24 +424,24 @@ def sample(
     data_pred_last = None
     for step in range(steps):
         if algorithm == "sde_euler":
-            xt, _ = solver.sde_euler_update(xt, step, mask, model_input)
+            xt, _ = solver.sde_euler_update(xt, step, mask, model_input, doc_ids)
         elif algorithm == "ode_euler":
-            xt, _ = solver.ode_euler_update(xt, step, mask, model_input)
+            xt, _ = solver.ode_euler_update(xt, step, mask, model_input, doc_ids)
         elif algorithm == "ode_bfnsolver1":
-            xt, _ = solver.ode_bfnsolver1_update(xt, step, mask, model_input)
+            xt, _ = solver.ode_bfnsolver1_update(xt, step, mask, model_input, doc_ids)
         elif algorithm == "ode_bfnsolver2_single_step":
             xt, _ = solver.ode_bfnsolver2_single_step_update(
-                xt, step, mask, model_input
+                xt, step, mask, model_input, doc_ids
             )
         elif algorithm == "ode_bfnsolver2_multi_step":
             xt, data_pred_last = solver.ode_bfnsolver2_multi_step_update(
-                xt, step, mask, model_input, data_pred_last
+                xt, step, mask, model_input, doc_ids, data_pred_last
             )
         elif algorithm == "sde_bfnsolver1":
-            xt, _ = solver.sde_bfnsolver1_update(xt, step, mask, model_input)
+            xt, _ = solver.sde_bfnsolver1_update(xt, step, mask, model_input, doc_ids)
         elif algorithm == "sde_bfnsolver2_multi_step":
             xt, data_pred_last = solver.sde_bfnsolver2_multi_step_update(
-                xt, step, mask, model_input, data_pred_last
+                xt, step, mask, model_input, doc_ids, data_pred_last
             )
         else:
             raise NotImplementedError
@@ -440,6 +459,7 @@ def inference(
     K: int,
     mask: Tensor,
     masked_input: Tensor,
+    doc_ids: Tensor,
     device: torch.device,
     dtype: torch.dtype = torch.float32,
     tk: TokenizerBase | None = None,
@@ -454,6 +474,7 @@ def inference(
         K,
         mask,
         masked_input,
+        doc_ids,
         device,
         steps=num_steps,
         algorithm="sde_euler",
