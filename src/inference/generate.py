@@ -124,7 +124,9 @@ class TextBFNSolver:
         addi_step=False,
     ):
         # x_s -> x_t
-        t = torch.ones(x_s.shape[0], device=x_s.device) * (1 - self.times[step])
+        t = torch.ones((x_s.shape[0], x_s.shape[1]), device=x_s.device) * (
+            1 - self.times[step]
+        )
 
         g = self.g_t[step]
 
@@ -151,7 +153,7 @@ class TextBFNSolver:
                     + g * self.delta_t**0.5 * noise
                 )
                 theta = F.softmax(x_t, -1)
-                t = torch.ones(x_s.shape[0], device=x_s.device) * (
+                t = torch.ones((x_s.shape[0], x_s.shape[1]), device=x_s.device) * (
                     1 - self.times[step + 1]
                 )
                 theta = torch.where(mask.unsqueeze(-1), theta, model_input)
@@ -178,7 +180,9 @@ class TextBFNSolver:
         addi_step=False,
     ):
         # x_s -> x_t
-        t = torch.ones(x_s.shape[0], device=x_s.device) * (1 - self.times[step])
+        t = torch.ones((x_s.shape[0], x_s.shape[1]), device=x_s.device) * (
+            1 - self.times[step]
+        )
 
         f = self.f_t[step]
         g = self.g_t[step]
@@ -205,7 +209,7 @@ class TextBFNSolver:
                     * self.delta_t
                 )
                 theta = F.softmax(x_t, -1)
-                t = torch.ones(x_s.shape[0], device=x_s.device) * (
+                t = torch.ones((x_s.shape[0], x_s.shape[1]), device=x_s.device) * (
                     1 - self.times[step + 1]
                 )
                 theta = torch.where(mask.unsqueeze(-1), theta, model_input)
@@ -227,7 +231,9 @@ class TextBFNSolver:
         self, x_s, step, mask, model_input, doc_ids, last_drop=False
     ):
         # x_s -> x_t
-        t = torch.ones(x_s.shape[0], device=x_s.device) * (1 - self.times[step])
+        t = torch.ones((x_s.shape[0], x_s.shape[1]), device=x_s.device) * (
+            1 - self.times[step]
+        )
         t_t, t_s = self.times[step + 1], self.times[step]
         c_t = self.K * self.max_sqrt_beta**2 * (1 - t_t)
         with torch.no_grad():
@@ -254,7 +260,9 @@ class TextBFNSolver:
         data_pred_last=None,
         last_drop=False,
     ):
-        t = torch.ones(x_s.shape[0], device=x_s.device) * (1 - self.times[step])
+        t = torch.ones((x_s.shape[0], x_s.shape[1]), device=x_s.device) * (
+            1 - self.times[step]
+        )
         t_t, t_s = self.times[step + 1], self.times[step]
         c_t = self.K * self.max_sqrt_beta**2 * (1 - t_t)
         with torch.no_grad():
@@ -286,7 +294,9 @@ class TextBFNSolver:
         self, x_s, step, mask, model_input, doc_ids, last_drop=False
     ):
         # x_s -> x_t
-        t = torch.ones(x_s.shape[0], device=x_s.device) * (1 - self.times[step])
+        t = torch.ones((x_s.shape[0], x_s.shape[1]), device=x_s.device) * (
+            1 - self.times[step]
+        )
         t_t, t_s = self.times[step + 1], self.times[step]
         t_r = (t_t + t_s) / 2
         c_r = self.K * self.max_sqrt_beta**2 * (1 - t_r)
@@ -304,7 +314,7 @@ class TextBFNSolver:
             x_r = (1 - t_r) / (1 - t_s) * x_s + c_r * (t_r - t_s) * (
                 1 / self.K - data_pred_s
             )
-            t = torch.ones(x_s.shape[0], device=x_s.device) * (1 - t_r)
+            t = torch.ones((x_s.shape[0], x_s.shape[1]), device=x_s.device) * (1 - t_r)
             theta = F.softmax(x_r, -1)
             theta = torch.where(mask.unsqueeze(-1), theta, model_input)
             logits, _ = self.unet(theta, t, mask, doc_ids)
@@ -329,7 +339,9 @@ class TextBFNSolver:
         data_pred_last=None,
         last_drop=False,
     ):
-        t = torch.ones(x_s.shape[0], device=x_s.device) * (1 - self.times[step])
+        t = torch.ones((x_s.shape[0], x_s.shape[1]), device=x_s.device) * (
+            1 - self.times[step]
+        )
         t_t, t_s = self.times[step + 1], self.times[step]
         beta_s = self.max_sqrt_beta**2 * (1 - t_s) ** 2
         beta_t = self.max_sqrt_beta**2 * (1 - t_t) ** 2
@@ -376,7 +388,9 @@ class TextBFNSolver:
     def sde_bfnsolver1_update(
         self, x_s, step, mask, model_input, doc_ids, last_drop=False, cate_samp=False
     ):
-        t = torch.ones(x_s.shape[0], device=x_s.device) * (1 - self.times[step])
+        t = torch.ones((x_s.shape[0], x_s.shape[1]), device=x_s.device) * (
+            1 - self.times[step]
+        )
         t_t, t_s = self.times[step + 1], self.times[step]
         beta_s = self.max_sqrt_beta**2 * (1 - t_s) ** 2
         beta_t = self.max_sqrt_beta**2 * (1 - t_t) ** 2

@@ -21,10 +21,10 @@ def main():
     )
     checkpoint_name = "shakespeare_byt5_hnet"
     checkpoint_dir = "./checkpoints"
-    batch_size = 256
+    batch_size = 164
     seq_len = 128
     min_t = 1e-8
-    num_workers = 3
+    num_workers = 4
     hidden_size = 768
     layers = 6
     heads = 12
