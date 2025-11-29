@@ -19,7 +19,7 @@ def main():
     accelerator = Accelerator(
         log_with="tensorboard", project_dir="./runs", kwargs_handlers=[ddp_kwargs]
     )
-    checkpoint_name = "shakespeare_byt5_hnet"
+    checkpoint_name = "shakespeare_byt5_hnet_1e-5"
     checkpoint_dir = "./checkpoints"
     batch_size = 164
     seq_len = 128
@@ -65,7 +65,26 @@ def main():
         f"Created model with {sum(p.numel() for p in model.parameters())} parameters."
     )
 
-    opt = Opt(model.parameters(), lr=1e-5)
+    base_lr = 1e-5
+    mamba_chunker_lr = 5e-6
+    mamba_chunker_params = []
+    base_params = []
+
+    for name, param in model.named_parameters():
+        if any(
+            name.startswith(prefix)
+            for prefix in ["mamba_pre.", "mamba_post.", "chunker."]
+        ):
+            mamba_chunker_params.append(param)
+        else:
+            base_params.append(param)
+
+    opt = Opt(
+        [
+            {"params": base_params, "lr": base_lr},
+            {"params": mamba_chunker_params, "lr": mamba_chunker_lr},
+        ]
+    )
 
     lr_plateau = (
         None  # ReduceLR(opt, mode="min", factor=0.5, patience=500, cooldown=50)
@@ -85,6 +104,7 @@ def main():
         save_every=5_000,
         test_inference_steps=100,
         save_dir=checkpoint_dir,
+        grad_clip_norm=1.0,
     )
 
     context.load(ignore_missing=True)
