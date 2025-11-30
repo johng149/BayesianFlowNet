@@ -71,17 +71,17 @@ class DiscreteModel(nn.Module):
             nn.Linear(hidden_dim, hidden_dim),
         )
 
-        # Pre-chunk Mamba
-        self.mamba_pre = Mamba2(
-            d_model=hidden_dim,
-            headdim=self.headdim,
-            d_state=16,
-            d_conv=4,
-            expand=mamba_expand,
-        )
+        # # Pre-chunk Mamba
+        # self.mamba_pre = Mamba2(
+        #     d_model=hidden_dim,
+        #     headdim=self.headdim,
+        #     d_state=16,
+        #     d_conv=4,
+        #     expand=mamba_expand,
+        # )
 
-        # Chunker
-        self.chunker = PackDynamicSequenceChunker(dim=hidden_dim)
+        # # Chunker
+        # self.chunker = PackDynamicSequenceChunker(dim=hidden_dim)
 
         # Main Transformer (Flex Attention)
         self.transformer_blocks = nn.ModuleList(
@@ -97,14 +97,14 @@ class DiscreteModel(nn.Module):
             ]
         )
 
-        # Post-chunk Mamba
-        self.mamba_post = Mamba2(
-            d_model=hidden_dim,
-            headdim=self.headdim,
-            d_state=16,
-            d_conv=4,
-            expand=mamba_expand,
-        )
+        # # Post-chunk Mamba
+        # self.mamba_post = Mamba2(
+        #     d_model=hidden_dim,
+        #     headdim=self.headdim,
+        #     d_state=16,
+        #     d_conv=4,
+        #     expand=mamba_expand,
+        # )
 
         self.classifier = nn.Parameter(torch.randn(hidden_dim, K) * 0.02)
 
@@ -119,8 +119,30 @@ class DiscreteModel(nn.Module):
     def token_emb(self, x):
         return x @ self.emb
 
-    def positional_emb(self, x):
-        return x  # no-op for now, Mamba is recurrent and so should implicitly handle position
+    def positional_emb(self, x, doc_ids):
+        is_new_group = torch.cat(
+            [
+                torch.ones_like(doc_ids[:, :1], dtype=torch.bool),
+                doc_ids[:, 1:] != doc_ids[:, :-1],
+            ],
+            dim=1,
+        )
+        # Get the indices where new groups start
+        group_start_indices = torch.where(is_new_group)[1]
+
+        # Broadcast subtraction: subtract the start index of current group from position
+        positions = (
+            torch.arange(doc_ids.size(1), device=doc_ids.device)
+            .unsqueeze(0)
+            .expand_as(doc_ids)
+        )
+        group_starts = torch.zeros_like(positions)
+        group_starts[:, is_new_group[0]] = group_start_indices
+        group_starts = group_starts.cummax(dim=1)[0]  # Forward fill the start indices
+        positions = positions - group_starts  # (1, seq_len)
+
+        pos_embedding = self.pos_emb[positions]  # shape is (1, total_len, hidden_dim)
+        return x + pos_embedding
 
     def time_emb(self, x, t, mask):
         assert (
@@ -151,44 +173,47 @@ class DiscreteModel(nn.Module):
         unique_doc_ids, seq_lens = torch.unique_consecutive(doc_ids, return_counts=True)
 
         x = self.token_emb(x)
-        x = self.positional_emb(x)
+        x = self.positional_emb(x, doc_ids)
         x = self.time_emb(x, t, mask)
 
-        # Mamba Pre
-        x = self.mamba_pre(x, seq_idx=doc_ids)
+        # # Mamba Pre
+        # x = self.mamba_pre(x, seq_idx=doc_ids)
 
-        # Chunker
-        outputs, intermediates = self.chunker(
-            x.squeeze(0), seq_lens=seq_lens, return_intermediates=True
-        )
-        x_down = outputs.downsampled.unsqueeze(0)  # (1, total_len, D)
+        # # Chunker
+        # outputs, intermediates = self.chunker(
+        #     x.squeeze(0), seq_lens=seq_lens, return_intermediates=True
+        # )
+        # x_down = outputs.downsampled.unsqueeze(0)  # (1, total_len, D)
 
-        with torch.no_grad():
-            new_seq_lens = intermediates.new_seq_lens  # (Batch_Size,)
-            doc_ids_down = torch.repeat_interleave(unique_doc_ids, new_seq_lens)
+        # with torch.no_grad():
+        # new_seq_lens = intermediates.new_seq_lens  # (Batch_Size,)
+        # doc_ids_down = torch.repeat_interleave(unique_doc_ids, new_seq_lens)
+        doc_ids_down = doc_ids  # temporary for this experiment
+        x_down = x  # temporary for this experiment
 
         # Generate mask
-        mask_mod = generate_doc_mask_mod(causal, doc_ids_down)
+        mask_mod = generate_doc_mask_mod(None, doc_ids_down)
         block_mask = create_block_mask(
             mask_mod,
             B=None,
             H=None,
             Q_LEN=x_down.shape[1],
             KV_LEN=x_down.shape[1],
-            device=x.device,
+            device=x_down.device,
         )
 
         for block in self.transformer_blocks:
             x_down = block(x_down, block_mask)
 
-        packed_out = x_down.squeeze(0)  # (TotalChunks, D)
+        # packed_out = x_down.squeeze(0)  # (TotalChunks, D)
 
-        # Upsample via Chunker
-        x_up = outputs.upsample_fn(packed_out)  # (S, D)
+        # # Upsample via Chunker
+        # x_up = outputs.upsample_fn(packed_out)  # (S, D)
 
-        # Mamba Post
-        x = self.mamba_post(x_up.unsqueeze(0), seq_idx=doc_ids)
+        # # Mamba Post
+        # x = self.mamba_post(x_up.unsqueeze(0), seq_idx=doc_ids)
+        x = x_down
 
         pred = x @ self.classifier
 
-        return pred, outputs.weighted_aux_ratio_loss
+        return pred, 0  # outputs.weighted_aux_ratio_loss

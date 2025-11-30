@@ -11,23 +11,39 @@ def causal(b, h, q_idx, kv_idx):
 
 
 def generate_doc_mask_mod(mask_mod, document_id):
-    # can feed in another mask modifier function such as `causal`
+    # can feed in another mask modifier function such as `causal` or None
+    assert document_id.ndim == 1 or (
+        document_id.ndim == 2 and document_id.shape[0] == 1
+    )
+    doc_id = document_id.view(-1)
 
     # Get unique document IDs and their counts
-    _, counts = torch.unique_consecutive(document_id, return_counts=True)
+    _, counts = torch.unique_consecutive(doc_id, return_counts=True)
     # Create cumulative counts (offsets)
     offsets = torch.cat(
-        [torch.tensor([0], device=document_id.device), counts.cumsum(0)[:-1]]
+        [torch.tensor([0], device=doc_id.device), counts.cumsum(0)[:-1]]
     )
 
-    def doc_mask_wrapper(b, h, q_idx, kv_idx):
-        same_doc = document_id[q_idx] == document_id[kv_idx]
-        q_logical = q_idx - offsets[document_id[q_idx]]
-        kv_logical = kv_idx - offsets[document_id[kv_idx]]
-        inner_mask = mask_mod(b, h, q_logical, kv_logical)
-        return same_doc & inner_mask
+    if mask_mod is not None:
 
-    return doc_mask_wrapper
+        def doc_mask_wrapper(b, h, q_idx, kv_idx):
+            same_doc = doc_id[q_idx] == doc_id[kv_idx]
+            q_logical = q_idx - offsets[doc_id[q_idx]]
+            kv_logical = kv_idx - offsets[doc_id[kv_idx]]
+            inner_mask = mask_mod(b, h, q_logical, kv_logical)
+            return same_doc & inner_mask
+
+        return doc_mask_wrapper
+
+    else:
+
+        def doc_mask_wrapper_solo(b, h, q_idx, kv_idx):
+            same_doc = doc_id[q_idx] == doc_id[kv_idx]
+            q_logical = q_idx - offsets[doc_id[q_idx]]
+            kv_logical = kv_idx - offsets[doc_id[kv_idx]]
+            return same_doc
+
+        return doc_mask_wrapper_solo
 
 
 class TransformerBlock(Module):
