@@ -37,16 +37,18 @@ def default(v, d):
     return v if exists(v) else d
 
 
+@torch.compiler.disable
 def straight_through(t, value):
     return t + (value - t).detach()
 
 
+@torch.compiler.disable
 def frac_gradient(t: Tensor, frac=1.0) -> Tensor:
     if frac == 1:
         return t
 
     t_grad = t * frac
-    return straight_through(t_grad, t)
+    return straight_through(t_grad, t)  # pyright: ignore[reportCallIssue]
 
 
 class PackDynamicSequenceChunker(Module):
@@ -108,6 +110,7 @@ class PackDynamicSequenceChunker(Module):
 
         self.register_buffer("zero", torch.tensor(0.0), persistent=False)
 
+    @torch.compiler.disable
     def upsample(
         self, downsampled: Tensor, intermediates: Intermediates, apply_scale=True
     ) -> Tensor:
@@ -147,10 +150,13 @@ class PackDynamicSequenceChunker(Module):
         if self.handle_residual_proj:
             upsampled = upsampled + self.residual_proj(residual)
 
-        upsampled = frac_gradient(upsampled, self.learning_rate_difference)
+        upsampled = frac_gradient(
+            upsampled, self.learning_rate_difference  # pyright: ignore[reportCallIssue]
+        )
 
         return upsampled
 
+    @torch.compiler.disable
     def forward(
         self,
         tokens,  # float[b n d] or float[total_n d] if seq_lens is specified,
@@ -321,7 +327,9 @@ class PackDynamicSequenceChunker(Module):
         if needs_grad:
             # straight through for 1. multiplier on the expanded processed boundary tokens
 
-            upsampler_output_scale = straight_through(confidence, 1.0)
+            upsampler_output_scale = straight_through(
+                confidence, 1.0  # pyright: ignore[reportCallIssue]
+            )
 
             # auxiliary ratio loss in section 2.3.2, eq (10)
             # lets follow their notation
@@ -335,7 +343,7 @@ class PackDynamicSequenceChunker(Module):
 
             if self.straight_through_frac_vecs:
                 F_soft = (probs - self.boundary_threshold).sigmoid()
-                F = straight_through(F_soft, F)
+                F = straight_through(F_soft, F)  # pyright: ignore[reportCallIssue]
 
             F = F.mean(dim=-1)
 
@@ -371,19 +379,23 @@ class PackDynamicSequenceChunker(Module):
 
         # return the upsample function
 
+        @torch.compiler.disable
         def upsample(downsampled, apply_scale=True):
             downsampled_input = (
                 downsampled.unsqueeze(0) if downsampled.ndim == 2 else downsampled
             )
             upsampled = self.upsample(
-                downsampled_input, intermediates, apply_scale=apply_scale
+                downsampled_input,  # pyright: ignore[reportCallIssue]
+                intermediates,  # pyright: ignore[reportCallIssue]
+                apply_scale=apply_scale,
             )
             return upsampled.squeeze(0) if downsampled.ndim == 2 else upsampled
 
         # adjust learning rate
 
         downsampled_tokens = frac_gradient(
-            downsampled_tokens, self.learning_rate_difference**-1
+            downsampled_tokens,
+            self.learning_rate_difference**-1,  # pyright: ignore[reportCallIssue]
         )
 
         if packed_probs_mask is not None:
@@ -396,5 +408,4 @@ class PackDynamicSequenceChunker(Module):
         if not return_intermediates:
             return outputs
 
-        return outputs, intermediates
         return outputs, intermediates

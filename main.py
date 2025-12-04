@@ -19,12 +19,12 @@ def main():
     accelerator = Accelerator(
         log_with="tensorboard", project_dir="./runs", kwargs_handlers=[ddp_kwargs]
     )
-    checkpoint_name = "shakespeare_byt5_packed"
+    checkpoint_name = "shakespeare_byt5_packed_mambachunker"
     checkpoint_dir = "./checkpoints"
-    batch_size = 164
+    batch_size = 256
     seq_len = 128
     min_t = 1e-8
-    num_workers = 4
+    num_workers = 3
     hidden_size = 768
     layers = 6
     heads = 12
@@ -102,7 +102,7 @@ def main():
         test_loader=test_dl,
         target_epochs=15_000_000,
         test_every=5_100,
-        save_every=5_000,
+        save_every=10_000,
         test_inference_steps=100,
         save_dir=checkpoint_dir,
         grad_clip_norm=1.0,

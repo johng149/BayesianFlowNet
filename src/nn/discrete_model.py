@@ -61,7 +61,7 @@ class DiscreteModel(nn.Module):
         assert hidden_dim % num_heads == 0, "hidden_dim must be divisble by num_heads"
         self.headdim = hidden_dim // num_heads
 
-        self.num_layers = layers
+        self.num_layers = layers + 2  # account for pre and post chunker layers
         self.emb = nn.Parameter(torch.randn(K, hidden_dim) * 0.02)
         self.pos_emb = nn.Parameter(torch.randn(max_seq_len, hidden_dim) * 0.02)
         self.time_rotary = SinusoidalTimeEmbedding(hidden_dim)
@@ -71,17 +71,19 @@ class DiscreteModel(nn.Module):
             nn.Linear(hidden_dim, hidden_dim),
         )
 
-        # # Pre-chunk Mamba
-        # self.mamba_pre = Mamba2(
-        #     d_model=hidden_dim,
-        #     headdim=self.headdim,
-        #     d_state=16,
-        #     d_conv=4,
-        #     expand=mamba_expand,
-        # )
+        # Pre-chunk Mamba
+        self.pre_chunker = torch.compiler.disable(
+            Mamba2(
+                d_model=hidden_dim,
+                headdim=self.headdim,
+                d_state=16,
+                d_conv=4,
+                expand=mamba_expand,
+            )
+        )
 
-        # # Chunker
-        # self.chunker = PackDynamicSequenceChunker(dim=hidden_dim)
+        # Chunker
+        self.chunker = PackDynamicSequenceChunker(dim=hidden_dim)
 
         # Main Transformer (Flex Attention)
         self.transformer_blocks = nn.ModuleList(
@@ -97,14 +99,16 @@ class DiscreteModel(nn.Module):
             ]
         )
 
-        # # Post-chunk Mamba
-        # self.mamba_post = Mamba2(
-        #     d_model=hidden_dim,
-        #     headdim=self.headdim,
-        #     d_state=16,
-        #     d_conv=4,
-        #     expand=mamba_expand,
-        # )
+        # Post-chunk Mamba
+        self.post_chunker = torch.compiler.disable(
+            Mamba2(
+                d_model=hidden_dim,
+                headdim=self.headdim,
+                d_state=16,
+                d_conv=4,
+                expand=mamba_expand,
+            )
+        )
 
         self.classifier = nn.Parameter(torch.randn(hidden_dim, K) * 0.02)
 
@@ -176,20 +180,18 @@ class DiscreteModel(nn.Module):
         x = self.positional_emb(x, doc_ids)
         x = self.time_emb(x, t, mask)
 
-        # # Mamba Pre
-        # x = self.mamba_pre(x, seq_idx=doc_ids)
+        # Pre Chunker
+        x = self.pre_chunker(x, seq_idx=doc_ids)  # type: ignore
 
-        # # Chunker
-        # outputs, intermediates = self.chunker(
-        #     x.squeeze(0), seq_lens=seq_lens, return_intermediates=True
-        # )
-        # x_down = outputs.downsampled.unsqueeze(0)  # (1, total_len, D)
+        # Chunker
+        outputs, intermediates = self.chunker(
+            x.squeeze(0), seq_lens=seq_lens, return_intermediates=True
+        )
+        x_down = outputs.downsampled.unsqueeze(0)  # (1, total_len, D)
 
-        # with torch.no_grad():
-        # new_seq_lens = intermediates.new_seq_lens  # (Batch_Size,)
-        # doc_ids_down = torch.repeat_interleave(unique_doc_ids, new_seq_lens)
-        doc_ids_down = doc_ids  # temporary for this experiment
-        x_down = x  # temporary for this experiment
+        with torch.no_grad():
+            new_seq_lens = intermediates.new_seq_lens  # (Batch_Size,)
+            doc_ids_down = torch.repeat_interleave(unique_doc_ids, new_seq_lens)
 
         # Generate mask
         mask_mod = generate_doc_mask_mod(None, doc_ids_down)
@@ -205,15 +207,14 @@ class DiscreteModel(nn.Module):
         for block in self.transformer_blocks:
             x_down = block(x_down, block_mask)
 
-        # packed_out = x_down.squeeze(0)  # (TotalChunks, D)
+        packed_out = x_down.squeeze(0)  # (TotalChunks, D)
 
-        # # Upsample via Chunker
-        # x_up = outputs.upsample_fn(packed_out)  # (S, D)
+        # Upsample via Chunker
+        x_up = outputs.upsample_fn(packed_out)  # (S, D)
 
-        # # Mamba Post
-        # x = self.mamba_post(x_up.unsqueeze(0), seq_idx=doc_ids)
-        x = x_down
+        # Mamba Post
+        x = self.post_chunker(x_up.unsqueeze(0), seq_idx=doc_ids)  # type: ignore
 
         pred = x @ self.classifier
 
-        return pred, 0  # outputs.weighted_aux_ratio_loss
+        return pred, outputs.weighted_aux_ratio_loss
