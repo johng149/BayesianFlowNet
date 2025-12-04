@@ -55,11 +55,13 @@ class DiscreteModel(nn.Module):
         mamba_expand: int = 2,
         layers: int = 3,
         dropout: float = 0.1,
+        use_chunkers: bool = True,
     ):
         super().__init__()
         mamba_check(hidden_dim, num_heads, mamba_expand)
         assert hidden_dim % num_heads == 0, "hidden_dim must be divisble by num_heads"
         self.headdim = hidden_dim // num_heads
+        self.use_chunkers = use_chunkers
 
         self.num_layers = layers + 2  # account for pre and post chunker layers
         self.emb = nn.Parameter(torch.randn(K, hidden_dim) * 0.02)
@@ -72,18 +74,26 @@ class DiscreteModel(nn.Module):
         )
 
         # Pre-chunk Mamba
-        self.pre_chunker = torch.compiler.disable(
-            Mamba2(
-                d_model=hidden_dim,
-                headdim=self.headdim,
-                d_state=16,
-                d_conv=4,
-                expand=mamba_expand,
+        self.pre_chunker = (
+            torch.compiler.disable(
+                Mamba2(
+                    d_model=hidden_dim,
+                    headdim=self.headdim,
+                    d_state=16,
+                    d_conv=4,
+                    expand=mamba_expand,
+                )
             )
+            if use_chunkers
+            else nn.Identity()
         )
 
         # Chunker
-        self.chunker = PackDynamicSequenceChunker(dim=hidden_dim)
+        self.chunker = (
+            PackDynamicSequenceChunker(dim=hidden_dim)
+            if use_chunkers
+            else nn.Identity()
+        )
 
         # Main Transformer (Flex Attention)
         self.transformer_blocks = nn.ModuleList(
@@ -100,14 +110,18 @@ class DiscreteModel(nn.Module):
         )
 
         # Post-chunk Mamba
-        self.post_chunker = torch.compiler.disable(
-            Mamba2(
-                d_model=hidden_dim,
-                headdim=self.headdim,
-                d_state=16,
-                d_conv=4,
-                expand=mamba_expand,
+        self.post_chunker = (
+            torch.compiler.disable(
+                Mamba2(
+                    d_model=hidden_dim,
+                    headdim=self.headdim,
+                    d_state=16,
+                    d_conv=4,
+                    expand=mamba_expand,
+                )
             )
+            if use_chunkers
+            else nn.Identity()
         )
 
         self.classifier = nn.Parameter(torch.randn(hidden_dim, K) * 0.02)
@@ -181,17 +195,29 @@ class DiscreteModel(nn.Module):
         x = self.time_emb(x, t, mask)
 
         # Pre Chunker
-        x = self.pre_chunker(x, seq_idx=doc_ids)  # type: ignore
+        x = self.pre_chunker(x, seq_idx=doc_ids) if self.use_chunkers else x  # type: ignore
 
         # Chunker
-        outputs, intermediates = self.chunker(
-            x.squeeze(0), seq_lens=seq_lens, return_intermediates=True
+        outputs, intermediates = (
+            self.chunker(x.squeeze(0), seq_lens=seq_lens, return_intermediates=True)
+            if self.use_chunkers
+            else (x.squeeze(0), None)
         )
-        x_down = outputs.downsampled.unsqueeze(0)  # (1, total_len, D)
+        x_down = (
+            outputs.downsampled.unsqueeze(0)
+            if self.use_chunkers
+            else outputs.unsqueeze(0)
+        )  # (1, total_len, D)
 
         with torch.no_grad():
-            new_seq_lens = intermediates.new_seq_lens  # (Batch_Size,)
-            doc_ids_down = torch.repeat_interleave(unique_doc_ids, new_seq_lens)
+            if self.use_chunkers:
+                assert (
+                    intermediates is not None
+                ), "Intermediates should not be None when using chunkers"
+                new_seq_lens = intermediates.new_seq_lens  # (Batch_Size,)
+                doc_ids_down = torch.repeat_interleave(unique_doc_ids, new_seq_lens)
+            else:
+                doc_ids_down = doc_ids
 
         # Generate mask
         mask_mod = generate_doc_mask_mod(None, doc_ids_down)
@@ -210,11 +236,13 @@ class DiscreteModel(nn.Module):
         packed_out = x_down.squeeze(0)  # (TotalChunks, D)
 
         # Upsample via Chunker
-        x_up = outputs.upsample_fn(packed_out)  # (S, D)
+        x_up = (
+            outputs.upsample_fn(packed_out) if self.use_chunkers else packed_out
+        )  # (S, D)
 
         # Mamba Post
-        x = self.post_chunker(x_up.unsqueeze(0), seq_idx=doc_ids)  # type: ignore
+        x = self.post_chunker(x_up.unsqueeze(0), seq_idx=doc_ids) if self.use_chunkers else x_up.unsqueeze(0)  # type: ignore
 
         pred = x @ self.classifier
 
-        return pred, outputs.weighted_aux_ratio_loss
+        return pred, outputs.weighted_aux_ratio_loss if self.use_chunkers else 0.0

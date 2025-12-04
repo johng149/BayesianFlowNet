@@ -19,7 +19,7 @@ def main():
     accelerator = Accelerator(
         log_with="tensorboard", project_dir="./runs", kwargs_handlers=[ddp_kwargs]
     )
-    checkpoint_name = "shakespeare_byt5_packed_mambachunker"
+    checkpoint_name = "shakespeare_byt5_packed_toggleable_chunker"
     checkpoint_dir = "./checkpoints"
     batch_size = 256
     seq_len = 128
@@ -59,6 +59,7 @@ def main():
         num_heads=heads,
         layers=layers,
         dropout=0.1,
+        use_chunkers=False,
     )
 
     print(
