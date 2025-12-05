@@ -19,7 +19,7 @@ def main():
     accelerator = Accelerator(
         log_with="tensorboard", project_dir="./runs", kwargs_handlers=[ddp_kwargs]
     )
-    checkpoint_name = "shakespeare_byt5_packed_toggleable_chunker"
+    checkpoint_name = "shakespeare_byt5_packed_elephant"
     checkpoint_dir = "./checkpoints"
     batch_size = 256
     seq_len = 128
@@ -66,26 +66,6 @@ def main():
         f"Created model with {sum(p.numel() for p in model.parameters())} parameters."
     )
 
-    # base_lr = 1e-5
-    # mamba_chunker_lr = 5e-6
-    # mamba_chunker_params = []
-    # base_params = []
-
-    # for name, param in model.named_parameters():
-    #     if any(
-    #         name.startswith(prefix)
-    #         for prefix in ["mamba_pre.", "mamba_post.", "chunker."]
-    #     ):
-    #         mamba_chunker_params.append(param)
-    #     else:
-    #         base_params.append(param)
-
-    # opt = Opt(
-    #     [
-    #         {"params": base_params, "lr": base_lr},
-    #         {"params": mamba_chunker_params, "lr": mamba_chunker_lr},
-    #     ]
-    # )
     opt = Opt(model.parameters(), lr=1e-4)
 
     lr_plateau = (

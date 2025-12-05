@@ -6,6 +6,7 @@ from torch import nn
 from torch.nn.attention.flex_attention import create_block_mask
 
 from src.nn.chunker import PackDynamicSequenceChunker
+from src.nn.elephant import ElephantActivation
 from src.nn.flex_transformer import TransformerBlock, causal, generate_doc_mask_mod
 
 
@@ -69,7 +70,7 @@ class DiscreteModel(nn.Module):
         self.time_rotary = SinusoidalTimeEmbedding(hidden_dim)
         self.time_mlp = nn.Sequential(
             nn.Linear(hidden_dim, hidden_dim),
-            nn.GELU(),
+            ElephantActivation(),
             nn.Linear(hidden_dim, hidden_dim),
         )
 

@@ -3,6 +3,8 @@ from einops import rearrange
 from torch.nn import Linear, Module
 from torch.nn.attention.flex_attention import create_block_mask, flex_attention
 
+from src.nn.elephant import ElephantActivation
+
 # --- Flex Attention Utils ---
 
 
@@ -59,7 +61,7 @@ class TransformerBlock(Module):
 
         self.norm2 = torch.nn.RMSNorm(dim)
         self.ff = torch.nn.Sequential(
-            Linear(dim, dim * 4), torch.nn.GELU(), Linear(dim * 4, dim)
+            Linear(dim, dim * 4), ElephantActivation(), Linear(dim * 4, dim)
         )
         self.flex = torch.compile(flex_attention)
         self.dropout = torch.nn.Dropout(dropout)
