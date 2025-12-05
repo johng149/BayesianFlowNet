@@ -7,6 +7,7 @@ from torch.nn.attention.flex_attention import create_block_mask
 
 from src.nn.chunker import PackDynamicSequenceChunker
 from src.nn.flex_transformer import TransformerBlock, causal, generate_doc_mask_mod
+from src.nn.monarch_linear import MonarchLinear
 
 
 class SinusoidalTimeEmbedding(nn.Module):
@@ -64,13 +65,13 @@ class DiscreteModel(nn.Module):
         self.use_chunkers = use_chunkers
 
         self.num_layers = layers + 2  # account for pre and post chunker layers
-        self.emb = nn.Parameter(torch.randn(K, hidden_dim) * 0.02)
+        self.emb = MonarchLinear(in_features=K, out_features=hidden_dim, bias=False)
         self.pos_emb = nn.Parameter(torch.randn(max_seq_len, hidden_dim) * 0.02)
         self.time_rotary = SinusoidalTimeEmbedding(hidden_dim)
         self.time_mlp = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim),
+            MonarchLinear(hidden_dim, hidden_dim, bias=False),
             nn.GELU(),
-            nn.Linear(hidden_dim, hidden_dim),
+            MonarchLinear(hidden_dim, hidden_dim, bias=False),
         )
 
         # Pre-chunk Mamba
@@ -104,8 +105,9 @@ class DiscreteModel(nn.Module):
                     dim_head=self.headdim,
                     num_layers=layers,  # used for weight init scaling
                     dropout=dropout,
+                    depth=i,
                 )
-                for _ in range(layers)
+                for i in range(layers)
             ]
         )
 
@@ -124,7 +126,10 @@ class DiscreteModel(nn.Module):
             else nn.Identity()
         )
 
-        self.classifier = nn.Parameter(torch.randn(hidden_dim, K) * 0.02)
+        # self.classifier = nn.Parameter(torch.randn(hidden_dim, K) * 0.02)
+        self.classifier = MonarchLinear(
+            in_features=hidden_dim, out_features=K, bias=False
+        )
 
         self.apply(self._init_weights)
 
@@ -135,7 +140,8 @@ class DiscreteModel(nn.Module):
                 torch.nn.init.zeros_(module.bias)
 
     def token_emb(self, x):
-        return x @ self.emb
+        # return x @ self.emb
+        return self.emb(x)
 
     def positional_emb(self, x, doc_ids):
         is_new_group = torch.cat(
@@ -243,6 +249,7 @@ class DiscreteModel(nn.Module):
         # Mamba Post
         x = self.post_chunker(x_up.unsqueeze(0), seq_idx=doc_ids) if self.use_chunkers else x_up.unsqueeze(0)  # type: ignore
 
-        pred = x @ self.classifier
+        # pred = x @ self.classifier
+        pred = self.classifier(x)
 
         return pred, outputs.weighted_aux_ratio_loss if self.use_chunkers else 0.0

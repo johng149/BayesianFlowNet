@@ -9,6 +9,8 @@ from torch.nested import nested_tensor
 from torch.nn import Linear, Module, Parameter
 from torch.nn.functional import cosine_similarity, pad
 
+from src.nn.monarch_linear import MonarchLinear
+
 Outputs = namedtuple(
     "Outputs", ["downsampled", "upsample_fn", "weighted_aux_ratio_loss"]
 )
@@ -70,7 +72,7 @@ class PackDynamicSequenceChunker(Module):
 
         # linear to queries and keys
 
-        self.to_queries_keys = Linear(dim, dim_queries_keys * 2, bias=False)
+        self.to_queries_keys = MonarchLinear(dim, dim_queries_keys * 2, bias=False)
 
         # start key token, so first token can be segmented / chunked out
 
@@ -93,7 +95,7 @@ class PackDynamicSequenceChunker(Module):
         self.handle_residual_proj = handle_residual_proj
 
         if handle_residual_proj:
-            self.residual_proj = Linear(dim, dim)
+            self.residual_proj = MonarchLinear(dim, dim)
 
         # learning rate modulation, appendix C
         # the multiplier on the learning rate as one goes from outer to inner of the h-net, and inverse of this value from inner to outer
