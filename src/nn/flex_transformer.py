@@ -56,7 +56,16 @@ def lambda_init_fn(depth):
 
 
 class TransformerBlock(Module):
-    def __init__(self, dim, heads, dim_head, depth, num_layers=1, dropout=0.0):
+    def __init__(
+        self,
+        dim,
+        heads,
+        dim_head,
+        depth,
+        num_layers=1,
+        dropout=0.0,
+        difftransformer=True,
+    ):
         super().__init__()
         self.depth = depth
         self.num_layers = num_layers
@@ -65,7 +74,14 @@ class TransformerBlock(Module):
         self.dim_head = dim_head
         self.head_dim = dim // heads
 
-        self.to_qkv = MonarchLinear(dim, heads * dim_head * 3 * 2, bias=False)
+        self.difftransformer = difftransformer
+        self.to_qkv = (
+            MonarchLinear(dim, heads * dim_head * 3 * 2, bias=False)
+            if difftransformer
+            else MonarchLinear(dim, heads * dim_head * 3, bias=False)
+        )
+        # TODO: Get rid of all monarch linear layers and go back to normal linear
+        # as some strange issue makes the MonarchLinear model loss performance suck
         self.to_out = MonarchLinear(heads * dim_head, dim, bias=False)
 
         self.lambda_init = lambda_init_fn(depth)
@@ -123,29 +139,41 @@ class TransformerBlock(Module):
         x = self.norm1(x)
 
         qkv = self.to_qkv(x)  # (B, S, 2 * 3 * H * Dh)
-        qkv = rearrange(
-            qkv, "b s (n t h d) -> n t b h s d", n=2, t=3, h=self.heads, d=self.dim_head
-        )  # (2, 3, B, H, S, Dh)
-        q1, k1, v1 = qkv[0]  # (B, H, S, Dh)
-        q2, k2, v2 = qkv[1]  # (B, H, S, Dh)
-        # q, k, v = rearrange(
-        #     qkv, "b s (t h d) -> t b h s d", t=3, h=self.heads, d=self.dim_head
-        # )
+        if self.difftransformer:
+            qkv = rearrange(
+                qkv,
+                "b s (n t h d) -> n t b h s d",
+                n=2,
+                t=3,
+                h=self.heads,
+                d=self.dim_head,
+            )  # (2, 3, B, H, S, Dh)
+            q1, k1, v1 = qkv[0]  # (B, H, S, Dh)
+            q2, k2, v2 = qkv[1]  # (B, H, S, Dh)
+        else:
+            q1, k1, v1 = rearrange(
+                qkv, "b s (t h d) -> t b h s d", t=3, h=self.heads, d=self.dim_head
+            )
 
         # Flex Attention
         out = self.flex(q1, k1, v1, block_mask=block_mask)  # (B, S, H, D)
-        out_diff = self.flex(q2, k2, v2, block_mask=block_mask)  # (B, S, H, D)
+        if self.difftransformer:
+            out_diff = self.flex(q2, k2, v2, block_mask=block_mask)  # (B, S, H, D)
 
-        lambda_1 = torch.exp(torch.sum(self.lambda_q1 * self.lambda_k1, dim=-1).float())
-        lambda_2 = torch.exp(torch.sum(self.lambda_q2 * self.lambda_k2, dim=-1).float())
-        lambda_full = lambda_1 - lambda_2 + self.lambda_init
+            lambda_1 = torch.exp(
+                torch.sum(self.lambda_q1 * self.lambda_k1, dim=-1).float()
+            )
+            lambda_2 = torch.exp(
+                torch.sum(self.lambda_q2 * self.lambda_k2, dim=-1).float()
+            )
+            lambda_full = lambda_1 - lambda_2 + self.lambda_init
 
-        assert isinstance(out, Tensor) and isinstance(out_diff, Tensor)
+            assert isinstance(out, Tensor) and isinstance(out_diff, Tensor)
 
-        out = out - lambda_full * out_diff
+            out = out - lambda_full * out_diff
 
-        out = self.diff_norm(out)
-        out = out * (1 - self.lambda_init)
+            out = self.diff_norm(out)
+            out = out * (1 - self.lambda_init)
 
         out = rearrange(out, "b h s d -> b s (h d)")
         out = self.to_out(out)

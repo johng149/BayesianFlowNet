@@ -57,12 +57,14 @@ class DiscreteModel(nn.Module):
         layers: int = 3,
         dropout: float = 0.1,
         use_chunkers: bool = True,
+        difftransformer: bool = True,
     ):
         super().__init__()
         mamba_check(hidden_dim, num_heads, mamba_expand)
         assert hidden_dim % num_heads == 0, "hidden_dim must be divisble by num_heads"
         self.headdim = hidden_dim // num_heads
         self.use_chunkers = use_chunkers
+        self.difftransformer = difftransformer
 
         self.num_layers = layers + 2  # account for pre and post chunker layers
         self.emb = MonarchLinear(in_features=K, out_features=hidden_dim, bias=False)
@@ -106,6 +108,7 @@ class DiscreteModel(nn.Module):
                     num_layers=layers,  # used for weight init scaling
                     dropout=dropout,
                     depth=i,
+                    difftransformer=difftransformer,
                 )
                 for i in range(layers)
             ]
