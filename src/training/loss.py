@@ -1,16 +1,25 @@
+from typing import TypedDict
+
 import torch
 from torch import Tensor
 
 from src.schedule.base import ScheduleOutput
 
+LossContext = TypedDict(
+    "LossContext",
+    {
+        "scheduler_output": ScheduleOutput,
+        "target": Tensor,
+        "mask": Tensor,
+    },
+)
+
 
 def loss(
-    scheduler_output: ScheduleOutput,
-    target: Tensor,
+    context: LossContext,
     model_output_logits: Tensor,
-    mask: Tensor,
-    auxiliary_loss: Tensor,
-    aux_weight: float = 0.03,
+    auxiliary_loss: Tensor | float,
+    aux_weight: float,
 ) -> Tensor:
     """
     Compute the loss given the scheduler output, target tensor, and model output logits.
@@ -26,6 +35,9 @@ def loss(
     Returns:
         Tensor: Computed loss.
     """
+    target = context["target"]
+    scheduler_output = context["scheduler_output"]
+    mask = context["mask"]
     batch_size, seq_len, K = target.shape
     alpha = scheduler_output["alpha"]
     assert (

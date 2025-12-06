@@ -2,11 +2,13 @@ import math
 
 import torch
 from mamba_ssm import Mamba2
-from torch import nn
+from torch import Tensor, nn
 from torch.nn.attention.flex_attention import create_block_mask
 
 from src.nn.chunker import PackDynamicSequenceChunker
 from src.nn.flex_transformer import TransformerBlock, causal, generate_doc_mask_mod
+from src.training.loss import LossContext
+from src.training.loss import loss as loss_fn
 
 
 class SinusoidalTimeEmbedding(nn.Module):
@@ -56,16 +58,27 @@ class DiscreteModel(nn.Module):
         layers: int = 3,
         dropout: float = 0.1,
         use_chunkers: bool = True,
+        mcmc_steps: int = 2,
+        aux_loss_weight: float = 0.03,
+        mcmc_step_size: float = 0.01,
     ):
         super().__init__()
-        mamba_check(hidden_dim, num_heads, mamba_expand)
+        mamba_check(hidden_dim, num_heads, mamba_expand) if use_chunkers else None
         assert hidden_dim % num_heads == 0, "hidden_dim must be divisble by num_heads"
         self.headdim = hidden_dim // num_heads
         self.use_chunkers = use_chunkers
+        self.mcmc_steps = mcmc_steps
+        self.aux_loss_weight = aux_loss_weight
+        self.mcmc_step_size = mcmc_step_size
+
+        self.mcmc_alpha = nn.Parameter(
+            torch.tensor(self.mcmc_step_size), requires_grad=True
+        )
 
         self.num_layers = layers + 2  # account for pre and post chunker layers
         self.emb = nn.Parameter(torch.randn(K, hidden_dim) * 0.02)
         self.pos_emb = nn.Parameter(torch.randn(max_seq_len, hidden_dim) * 0.02)
+        self.mcmc_embedding = nn.Parameter(torch.randn(hidden_dim) * 0.02)
         self.time_rotary = SinusoidalTimeEmbedding(hidden_dim)
         self.time_mlp = nn.Sequential(
             nn.Linear(hidden_dim, hidden_dim),
@@ -124,6 +137,8 @@ class DiscreteModel(nn.Module):
             else nn.Identity()
         )
 
+        # in this case, the classifier is actually the energy head. Taking the negative of
+        # its output (the energy) gives the actual logits
         self.classifier = nn.Parameter(torch.randn(hidden_dim, K) * 0.02)
 
         self.apply(self._init_weights)
@@ -175,7 +190,10 @@ class DiscreteModel(nn.Module):
 
         return x + time_embedding
 
-    def forward(self, x, t, mask, doc_ids):
+    def mcmc_emb(self, x: Tensor, step: int) -> Tensor:
+        return x + self.mcmc_embedding * step
+
+    def forward(self, x, t, mask, doc_ids, targets: LossContext | None = None):
         batch_size, seq_len, K = x.shape
         assert mask.shape == (
             batch_size,
@@ -193,56 +211,80 @@ class DiscreteModel(nn.Module):
         x = self.token_emb(x)
         x = self.positional_emb(x, doc_ids)
         x = self.time_emb(x, t, mask)
+        x = self.mcmc_emb(x, 0)
 
-        # Pre Chunker
-        x = self.pre_chunker(x, seq_idx=doc_ids) if self.use_chunkers else x  # type: ignore
+        loss = 0.0
 
-        # Chunker
-        outputs, intermediates = (
-            self.chunker(x.squeeze(0), seq_lens=seq_lens, return_intermediates=True)
-            if self.use_chunkers
-            else (x.squeeze(0), None)
-        )
-        x_down = (
-            outputs.downsampled.unsqueeze(0)
-            if self.use_chunkers
-            else outputs.unsqueeze(0)
-        )  # (1, total_len, D)
+        for step in range(self.mcmc_steps):
+            x = x.detach().requires_grad_(True)
 
-        with torch.no_grad():
-            if self.use_chunkers:
-                assert (
-                    intermediates is not None
-                ), "Intermediates should not be None when using chunkers"
-                new_seq_lens = intermediates.new_seq_lens  # (Batch_Size,)
-                doc_ids_down = torch.repeat_interleave(unique_doc_ids, new_seq_lens)
-            else:
-                doc_ids_down = doc_ids
+            # Pre Chunker
+            x = self.pre_chunker(x, seq_idx=doc_ids) if self.use_chunkers else x  # type: ignore
 
-        # Generate mask
-        mask_mod = generate_doc_mask_mod(None, doc_ids_down)
-        block_mask = create_block_mask(
-            mask_mod,
-            B=None,
-            H=None,
-            Q_LEN=x_down.shape[1],
-            KV_LEN=x_down.shape[1],
-            device=x_down.device,
-        )
+            # Chunker
+            outputs, intermediates = (
+                self.chunker(x.squeeze(0), seq_lens=seq_lens, return_intermediates=True)
+                if self.use_chunkers
+                else (x.squeeze(0), None)
+            )
+            x_down = (
+                outputs.downsampled.unsqueeze(  # pyright: ignore[reportAttributeAccessIssue]
+                    0
+                )
+                if self.use_chunkers
+                else outputs.unsqueeze(0)
+            )  # (1, total_len, D)
 
-        for block in self.transformer_blocks:
-            x_down = block(x_down, block_mask)
+            with torch.no_grad():
+                if self.use_chunkers:
+                    assert (
+                        intermediates is not None
+                    ), "Intermediates should not be None when using chunkers"
+                    new_seq_lens = intermediates.new_seq_lens  # (Batch_Size,)
+                    doc_ids_down = torch.repeat_interleave(unique_doc_ids, new_seq_lens)
+                else:
+                    doc_ids_down = doc_ids
 
-        packed_out = x_down.squeeze(0)  # (TotalChunks, D)
+            # Generate mask
+            mask_mod = generate_doc_mask_mod(None, doc_ids_down)
+            block_mask = create_block_mask(
+                mask_mod,
+                B=None,
+                H=None,
+                Q_LEN=x_down.shape[1],
+                KV_LEN=x_down.shape[1],
+                device=x_down.device,
+            )
 
-        # Upsample via Chunker
-        x_up = (
-            outputs.upsample_fn(packed_out) if self.use_chunkers else packed_out
-        )  # (S, D)
+            for block in self.transformer_blocks:
+                x_down = block(x_down, block_mask)
 
-        # Mamba Post
-        x = self.post_chunker(x_up.unsqueeze(0), seq_idx=doc_ids) if self.use_chunkers else x_up.unsqueeze(0)  # type: ignore
+            packed_out = x_down.squeeze(0)  # (TotalChunks, D)
 
-        pred = x @ self.classifier
+            # Upsample via Chunker
+            x_up = (
+                outputs.upsample_fn(  # pyright: ignore[reportAttributeAccessIssue]
+                    packed_out
+                )
+                if self.use_chunkers
+                else packed_out
+            )  # (S, D)
 
-        return pred, outputs.weighted_aux_ratio_loss if self.use_chunkers else 0.0
+            # Mamba Post
+            x = self.post_chunker(x_up.unsqueeze(0), seq_idx=doc_ids) if self.use_chunkers else x_up.unsqueeze(0)  # type: ignore
+
+            pred = x @ self.classifier
+
+            energy, aux_loss = pred, (
+                outputs.weighted_aux_ratio_loss  # pyright: ignore[reportAttributeAccessIssue]
+                if self.use_chunkers
+                else 0.0
+            )
+            logits = -energy
+
+            grad = torch.autograd.grad(energy.sum(), x, create_graph=self.training)[0]
+            x = x - self.mcmc_alpha * grad
+
+            if targets is not None:
+                loss += loss_fn(targets, logits, aux_loss, self.aux_loss_weight)
+        return logits, loss / self.mcmc_steps

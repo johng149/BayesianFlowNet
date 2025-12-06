@@ -166,9 +166,13 @@ def train_step(context: TrainingContext, current_epoch: int):
     ground_truth = batch["ground_truth"]
     scheduler_output = batch["scheduler_output"]
     doc_ids = batch["document_id"]
-    prediction, aux = model(model_input, t, mask, doc_ids)
+    loss_context = {
+        "scheduler_output": scheduler_output,
+        "target": ground_truth,
+        "mask": mask,
+    }
+    prediction, l = model(model_input, t, mask, doc_ids, loss_context)
     optim.zero_grad()
-    l = loss(scheduler_output, ground_truth, prediction, mask, aux, context.aux_weight)
     context.accelerator.backward(l)
     if context.grad_clip_norm is not None and context.accelerator.sync_gradients:
         context.accelerator.clip_grad_norm_(model.parameters(), context.grad_clip_norm)
@@ -218,9 +222,12 @@ def test_step(context: TrainingContext, current_epoch: int):
     match = inference_result.argmax(dim=-1) == ground_truth.argmax(dim=-1)
 
     accuracy = match[mask].float().mean().item()
-
-    prediction, aux = model(model_input, t, mask, doc_ids)
-    l = loss(scheduler_output, ground_truth, prediction, mask, aux, context.aux_weight)
+    loss_context = {
+        "scheduler_output": scheduler_output,
+        "target": ground_truth,
+        "mask": mask,
+    }
+    prediction, l = model(model_input, t, mask, doc_ids, loss_context)
 
     context.log("test/loss", l.item(), current_epoch)
     context.log("test/accuracy", accuracy, current_epoch)
