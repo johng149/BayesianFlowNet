@@ -1,5 +1,6 @@
 from sched import scheduler
 
+import torch
 from accelerate import Accelerator, DistributedDataParallelKwargs
 from torch.optim import AdamW as Opt
 from torch.optim.lr_scheduler import ReduceLROnPlateau as ReduceLR

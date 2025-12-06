@@ -58,7 +58,7 @@ class DiscreteModel(nn.Module):
         layers: int = 3,
         dropout: float = 0.1,
         use_chunkers: bool = True,
-        mcmc_steps: int = 2,
+        mcmc_steps: int = 1,
         aux_loss_weight: float = 0.03,
         mcmc_step_size: float = 0.01,
     ):
@@ -194,6 +194,7 @@ class DiscreteModel(nn.Module):
         return x + self.mcmc_embedding * step
 
     def forward(self, x, t, mask, doc_ids, targets: LossContext | None = None):
+        # must ensure that x tracks gradients
         batch_size, seq_len, K = x.shape
         assert mask.shape == (
             batch_size,
@@ -208,83 +209,163 @@ class DiscreteModel(nn.Module):
 
         unique_doc_ids, seq_lens = torch.unique_consecutive(doc_ids, return_counts=True)
 
-        x = self.token_emb(x)
-        x = self.positional_emb(x, doc_ids)
-        x = self.time_emb(x, t, mask)
-        x = self.mcmc_emb(x, 0)
+        with torch.enable_grad():
+            x = self.token_emb(x)
+            x = self.positional_emb(x, doc_ids)
+            x = self.time_emb(x, t, mask)
 
-        loss = 0.0
+            loss = 0.0
 
-        for step in range(self.mcmc_steps):
-            x = x.detach().requires_grad_(True)
+            for step in range(self.mcmc_steps):
+                x = x.detach().requires_grad_(True)
+                x = self.mcmc_emb(x, step)
 
-            # Pre Chunker
-            x = self.pre_chunker(x, seq_idx=doc_ids) if self.use_chunkers else x  # type: ignore
+                # Pre Chunker
+                x = self.pre_chunker(x, seq_idx=doc_ids) if self.use_chunkers else x  # type: ignore
 
-            # Chunker
-            outputs, intermediates = (
-                self.chunker(x.squeeze(0), seq_lens=seq_lens, return_intermediates=True)
-                if self.use_chunkers
-                else (x.squeeze(0), None)
-            )
-            x_down = (
-                outputs.downsampled.unsqueeze(  # pyright: ignore[reportAttributeAccessIssue]
+                # Chunker
+                outputs, intermediates = (
+                    self.chunker(
+                        x.squeeze(0), seq_lens=seq_lens, return_intermediates=True
+                    )
+                    if self.use_chunkers
+                    else (x.squeeze(0), None)
+                )
+                x_down = (
+                    outputs.downsampled.unsqueeze(  # pyright: ignore[reportAttributeAccessIssue]
+                        0
+                    )
+                    if self.use_chunkers
+                    else outputs.unsqueeze(0)
+                )  # (1, total_len, D)
+
+                with torch.no_grad():
+                    if self.use_chunkers:
+                        assert (
+                            intermediates is not None
+                        ), "Intermediates should not be None when using chunkers"
+                        new_seq_lens = intermediates.new_seq_lens  # (Batch_Size,)
+                        doc_ids_down = torch.repeat_interleave(
+                            unique_doc_ids, new_seq_lens
+                        )
+                    else:
+                        doc_ids_down = doc_ids
+
+                # Generate mask
+                mask_mod = generate_doc_mask_mod(None, doc_ids_down)
+                block_mask = create_block_mask(
+                    mask_mod,
+                    B=None,
+                    H=None,
+                    Q_LEN=x_down.shape[1],
+                    KV_LEN=x_down.shape[1],
+                    device=x_down.device,
+                )
+
+                for block in self.transformer_blocks:
+                    x_down = block(x_down, block_mask)
+
+                packed_out = x_down.squeeze(0)  # (TotalChunks, D)
+
+                # Upsample via Chunker
+                x_up = (
+                    outputs.upsample_fn(  # pyright: ignore[reportAttributeAccessIssue]
+                        packed_out
+                    )
+                    if self.use_chunkers
+                    else packed_out
+                )  # (S, D)
+
+                # Mamba Post
+                x = self.post_chunker(x_up.unsqueeze(0), seq_idx=doc_ids) if self.use_chunkers else x_up.unsqueeze(0)  # type: ignore
+
+                pred = x @ self.classifier
+
+                energy, aux_loss = pred, (
+                    outputs.weighted_aux_ratio_loss  # pyright: ignore[reportAttributeAccessIssue]
+                    if self.use_chunkers
+                    else 0.0
+                )
+                logits = -energy
+
+                grad = torch.autograd.grad(energy.sum(), x, create_graph=self.training)[
                     0
+                ]
+                x_update = self.mcmc_alpha * grad
+                x = x - x_update * mask.unsqueeze(
+                    -1
+                )  # prevent updating unmasked positions (the input prompt)
+
+                ###
+
+                # Pre Chunker
+                x = self.pre_chunker(x, seq_idx=doc_ids) if self.use_chunkers else x  # type: ignore
+
+                # Chunker
+                outputs, intermediates = (
+                    self.chunker(
+                        x.squeeze(0), seq_lens=seq_lens, return_intermediates=True
+                    )
+                    if self.use_chunkers
+                    else (x.squeeze(0), None)
                 )
-                if self.use_chunkers
-                else outputs.unsqueeze(0)
-            )  # (1, total_len, D)
+                x_down = (
+                    outputs.downsampled.unsqueeze(  # pyright: ignore[reportAttributeAccessIssue]
+                        0
+                    )
+                    if self.use_chunkers
+                    else outputs.unsqueeze(0)
+                )  # (1, total_len, D)
 
-            with torch.no_grad():
-                if self.use_chunkers:
-                    assert (
-                        intermediates is not None
-                    ), "Intermediates should not be None when using chunkers"
-                    new_seq_lens = intermediates.new_seq_lens  # (Batch_Size,)
-                    doc_ids_down = torch.repeat_interleave(unique_doc_ids, new_seq_lens)
-                else:
-                    doc_ids_down = doc_ids
+                with torch.no_grad():
+                    if self.use_chunkers:
+                        assert (
+                            intermediates is not None
+                        ), "Intermediates should not be None when using chunkers"
+                        new_seq_lens = intermediates.new_seq_lens  # (Batch_Size,)
+                        doc_ids_down = torch.repeat_interleave(
+                            unique_doc_ids, new_seq_lens
+                        )
+                    else:
+                        doc_ids_down = doc_ids
 
-            # Generate mask
-            mask_mod = generate_doc_mask_mod(None, doc_ids_down)
-            block_mask = create_block_mask(
-                mask_mod,
-                B=None,
-                H=None,
-                Q_LEN=x_down.shape[1],
-                KV_LEN=x_down.shape[1],
-                device=x_down.device,
-            )
-
-            for block in self.transformer_blocks:
-                x_down = block(x_down, block_mask)
-
-            packed_out = x_down.squeeze(0)  # (TotalChunks, D)
-
-            # Upsample via Chunker
-            x_up = (
-                outputs.upsample_fn(  # pyright: ignore[reportAttributeAccessIssue]
-                    packed_out
+                # Generate mask
+                mask_mod = generate_doc_mask_mod(None, doc_ids_down)
+                block_mask = create_block_mask(
+                    mask_mod,
+                    B=None,
+                    H=None,
+                    Q_LEN=x_down.shape[1],
+                    KV_LEN=x_down.shape[1],
+                    device=x_down.device,
                 )
-                if self.use_chunkers
-                else packed_out
-            )  # (S, D)
 
-            # Mamba Post
-            x = self.post_chunker(x_up.unsqueeze(0), seq_idx=doc_ids) if self.use_chunkers else x_up.unsqueeze(0)  # type: ignore
+                for block in self.transformer_blocks:
+                    x_down = block(x_down, block_mask)
 
-            pred = x @ self.classifier
+                packed_out = x_down.squeeze(0)  # (TotalChunks, D)
 
-            energy, aux_loss = pred, (
-                outputs.weighted_aux_ratio_loss  # pyright: ignore[reportAttributeAccessIssue]
-                if self.use_chunkers
-                else 0.0
-            )
-            logits = -energy
+                # Upsample via Chunker
+                x_up = (
+                    outputs.upsample_fn(  # pyright: ignore[reportAttributeAccessIssue]
+                        packed_out
+                    )
+                    if self.use_chunkers
+                    else packed_out
+                )  # (S, D)
 
-            grad = torch.autograd.grad(energy.sum(), x, create_graph=self.training)[0]
-            x = x - self.mcmc_alpha * grad
+                # Mamba Post
+                x = self.post_chunker(x_up.unsqueeze(0), seq_idx=doc_ids) if self.use_chunkers else x_up.unsqueeze(0)  # type: ignore
 
-            if targets is not None:
-                loss += loss_fn(targets, logits, aux_loss, self.aux_loss_weight)
-        return logits, loss / self.mcmc_steps
+                pred = x @ self.classifier
+
+                energy, aux_loss = pred, (
+                    outputs.weighted_aux_ratio_loss  # pyright: ignore[reportAttributeAccessIssue]
+                    if self.use_chunkers
+                    else 0.0
+                )
+                logits = -energy
+
+                if targets is not None:
+                    loss += loss_fn(targets, logits, aux_loss, self.aux_loss_weight)
+            return logits, loss / self.mcmc_steps
