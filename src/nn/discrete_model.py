@@ -6,6 +6,7 @@ from torch import nn
 from torch.nn.attention.flex_attention import create_block_mask
 
 from src.nn.chunker import PackDynamicSequenceChunker
+from src.nn.deq import DEQLayer
 from src.nn.flex_transformer import TransformerBlock, causal, generate_doc_mask_mod
 
 
@@ -63,7 +64,9 @@ class DiscreteModel(nn.Module):
         self.headdim = hidden_dim // num_heads
         self.use_chunkers = use_chunkers
 
-        self.num_layers = layers + 2  # account for pre and post chunker layers
+        self.num_layers = (
+            layers + 2 if use_chunkers else layers
+        )  # account for pre and post chunker layers
         self.emb = nn.Parameter(torch.randn(K, hidden_dim) * 0.02)
         self.pos_emb = nn.Parameter(torch.randn(max_seq_len, hidden_dim) * 0.02)
         self.time_rotary = SinusoidalTimeEmbedding(hidden_dim)
@@ -95,6 +98,18 @@ class DiscreteModel(nn.Module):
             else nn.Identity()
         )
 
+        # use layers - 1 because the first layer uses DEQ
+        self.deq = DEQLayer(
+            TransformerBlock(
+                hidden_dim,
+                heads=num_heads,
+                dim_head=self.headdim,
+                num_layers=self.num_layers,  # used for weight init scaling
+                dropout=dropout,
+            ),
+            dim=hidden_dim,
+        )
+
         # Main Transformer (Flex Attention)
         self.transformer_blocks = nn.ModuleList(
             [
@@ -105,7 +120,7 @@ class DiscreteModel(nn.Module):
                     num_layers=layers,  # used for weight init scaling
                     dropout=dropout,
                 )
-                for _ in range(layers)
+                for _ in range(layers - 1)
             ]
         )
 
@@ -193,6 +208,18 @@ class DiscreteModel(nn.Module):
         x = self.token_emb(x)
         x = self.positional_emb(x, doc_ids)
         x = self.time_emb(x, t, mask)
+
+        deq_mask_mod = generate_doc_mask_mod(None, doc_ids)
+        deq_mask = create_block_mask(
+            deq_mask_mod,
+            B=None,
+            H=None,
+            Q_LEN=x.shape[1],
+            KV_LEN=x.shape[1],
+            device=x.device,
+        )
+
+        x = self.deq(x, None, deq_mask)
 
         # Pre Chunker
         x = self.pre_chunker(x, seq_idx=doc_ids) if self.use_chunkers else x  # type: ignore
