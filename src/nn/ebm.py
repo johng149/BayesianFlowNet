@@ -51,11 +51,13 @@ class EBM(nn.Module):
         mamba_expand: int = 2,
         dropout: float = 0.1,
         stepsize: float = 0.01,
+        max_grad_change: float = 9.0,
     ):
         super().__init__()
         mamba_check(hidden_dim, num_heads, mamba_expand)
         assert hidden_dim % num_heads == 0, "hidden_dim must be divisble by num_heads"
         self.headdim = hidden_dim // num_heads
+        self.max_grad_change = max_grad_change
 
         self.emb = nn.Parameter(torch.randn(K, hidden_dim) * 0.02)
         self.pos_emb = nn.Parameter(torch.randn(max_seq_len, hidden_dim) * 0.02)
@@ -160,6 +162,11 @@ class EBM(nn.Module):
             x_grad = torch.autograd.grad(
                 energy.sum(), original_x, create_graph=self.training
             )[0]
+
+            # clamp the maximum change in gradient to prevent energy head
+            # from predicting massive values
+            min_max = self.max_grad_change / self.mcmc_alpha
+            x_grad = torch.clamp(x_grad, min=-min_max, max=min_max)
 
             updated_x = (
                 original_x - self.mcmc_alpha * x_grad

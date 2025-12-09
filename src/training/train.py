@@ -41,6 +41,7 @@ class TrainingContext:
         metadata_save_file_name: str = "metadata.json",
         aux_weight: float = 0.03,  # weight for auxiliary loss
         grad_clip_norm: float | None = 1.0,
+        energy_magnitude_loss_weight: float = 1e-3,
     ):
         assert (
             grad_clip_norm is None or grad_clip_norm > 0.0
@@ -75,6 +76,7 @@ class TrainingContext:
         self.metadata_save_file_name = metadata_save_file_name
         self.aux_weight = aux_weight
         self.grad_clip_norm = grad_clip_norm
+        self.energy_magnitude_loss_weight = energy_magnitude_loss_weight
 
         self.train_loader, self.test_loader = self.accelerator.prepare(
             self.train_loader, self.test_loader
@@ -169,19 +171,23 @@ def train_step(context: TrainingContext, current_epoch: int):
     doc_ids = batch["document_id"]
     contrastive_input = batch["contrastive_input"]
     prediction, aux, ebm_logits, energy = model(model_input, t, mask, doc_ids)
-    _, contrastive_ebm_logits, _ = model(contrastive_input, t, mask, doc_ids, just_ebm=True)  # type: ignore
+    _, contrastive_ebm_logits, contrastive_energy = model(contrastive_input, t, mask, doc_ids, just_ebm=True)  # type: ignore
     optim.zero_grad()
     l = loss(scheduler_output, ground_truth, prediction, mask, aux, context.aux_weight)
     ebm_l = loss(scheduler_output, ground_truth, ebm_logits, mask, aux, 0.0)
     contrastive_ebm_l = loss(
         scheduler_output, ground_truth, contrastive_ebm_logits, mask, aux, 0.0
     )
+    energy_mag_loss = context.energy_magnitude_loss_weight * (
+        (energy**2).mean() + (contrastive_energy**2).mean()
+    )
 
     # we need to add a zero times energy.sum() to the backward call to
     # ensure that the gradient is computed for energy when using FSDP, or DDP
     # otherwise PyTorch will complain that reduction is not completed
-    # for prior iteration
-    context.accelerator.backward(l + ebm_l + contrastive_ebm_l + (0.0 * energy.sum()))
+    # for prior iteration. Actually, now that we penalize the magnitude of energy,
+    # we probably don't need this anymore.
+    context.accelerator.backward(l + ebm_l + contrastive_ebm_l + energy_mag_loss)
     if context.grad_clip_norm is not None and context.accelerator.sync_gradients:
         context.accelerator.clip_grad_norm_(model.parameters(), context.grad_clip_norm)
     optim.step()
@@ -191,6 +197,7 @@ def train_step(context: TrainingContext, current_epoch: int):
     context.log("train/ebm_loss", ebm_l.item(), current_epoch)
     context.log("train/total_loss", (l + ebm_l).item(), current_epoch)
     context.log("train/contrastive_ebm_loss", contrastive_ebm_l.item(), current_epoch)
+    context.log("train/energy_magnitude_loss", energy_mag_loss.item(), current_epoch)
 
 
 def test_step(context: TrainingContext, current_epoch: int):
