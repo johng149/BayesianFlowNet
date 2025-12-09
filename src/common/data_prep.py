@@ -111,7 +111,12 @@ def y(sampled_one_hot: Tensor, accuracy_t: Accuracy | Beta) -> Tensor:
         The shape of the output tensor is the same as sampled_one_hot, i.e., (batch_size, seq_len, K).
     """
     batch_size, seq_len, K = sampled_one_hot.shape
-    accuracy = accuracy_t.view(-1, 1, 1)  # allows for broadcasting over batches
+    if accuracy_t.ndim == 1:
+        accuracy = accuracy_t.view(-1, 1, 1)  # allows for broadcasting over batches
+    elif accuracy_t.ndim == 2:
+        accuracy = accuracy_t.unsqueeze(-1)
+    else:
+        accuracy = accuracy_t
     mean = accuracy * (K * sampled_one_hot - 1)
     variance = accuracy * K
     standard_deviation = torch.sqrt(variance)

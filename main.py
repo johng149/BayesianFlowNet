@@ -1,6 +1,6 @@
 from sched import scheduler
 
-from accelerate import Accelerator
+from accelerate import Accelerator, DistributedDataParallelKwargs
 from torch.optim import AdamW as Opt
 from torch.optim.lr_scheduler import ReduceLROnPlateau as ReduceLR
 from torch.utils.data import DataLoader
@@ -15,8 +15,11 @@ from src.training.train import train
 
 
 def main():
-    accelerator = Accelerator(log_with="tensorboard", project_dir="./runs")
-    checkpoint_name = "shakespeare_byt5"
+    ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
+    accelerator = Accelerator(
+        log_with="tensorboard", project_dir="./runs", kwargs_handlers=[ddp_kwargs]
+    )
+    checkpoint_name = "shakespeare_byt5_packed_toggleable_chunker"
     checkpoint_dir = "./checkpoints"
     batch_size = 256
     seq_len = 128
@@ -25,6 +28,8 @@ def main():
     hidden_size = 768
     layers = 6
     heads = 12
+    use_chunkers = False
+    dropout = 0.1
     tk = Tk()
     vocab_size = tk.vocab_size()
     scheduler = Scheduler(20.4054 / vocab_size)
@@ -55,7 +60,8 @@ def main():
         hidden_dim=hidden_size,
         num_heads=heads,
         layers=layers,
-        dropout=0.1,
+        dropout=dropout,
+        use_chunkers=use_chunkers,
     )
 
     print(
@@ -79,9 +85,10 @@ def main():
         test_loader=test_dl,
         target_epochs=15_000_000,
         test_every=5_100,
-        save_every=5_000,
+        save_every=10_000,
         test_inference_steps=100,
         save_dir=checkpoint_dir,
+        grad_clip_norm=1.0,
     )
 
     context.load(ignore_missing=True)

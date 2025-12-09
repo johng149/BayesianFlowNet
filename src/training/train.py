@@ -38,7 +38,18 @@ class TrainingContext:
         test_inference_steps: int = 100,
         save_dir: str | Path = "./checkpoints",
         metadata_save_file_name: str = "metadata.json",
+        aux_weight: float = 0.03,  # weight for auxiliary loss
+        grad_clip_norm: float | None = 1.0,
     ):
+        assert (
+            grad_clip_norm is None or grad_clip_norm > 0.0
+        ), "grad_clip_norm must be positive or None"
+        assert aux_weight >= 0.0, "aux_weight must be non-negative"
+        assert test_every > 0, "test_every must be positive"
+        assert save_every > 0, "save_every must be positive"
+        assert target_epochs > 0, "target_epochs must be positive"
+        assert test_inference_steps > 0, "test_inference_steps must be positive"
+
         # note that currently scheduler is not directly saved in the checkpoint, if you
         # want the scheduler to be saved (say, if you are using parameterized schedulers),
         # you need to include it in the model as a submodule.
@@ -61,6 +72,8 @@ class TrainingContext:
         self.test_inference_steps = test_inference_steps
         self.save_dir = Path(save_dir)
         self.metadata_save_file_name = metadata_save_file_name
+        self.aux_weight = aux_weight
+        self.grad_clip_norm = grad_clip_norm
 
         self.train_loader, self.test_loader = self.accelerator.prepare(
             self.train_loader, self.test_loader
@@ -152,10 +165,13 @@ def train_step(context: TrainingContext, current_epoch: int):
     mask = batch["mask"]
     ground_truth = batch["ground_truth"]
     scheduler_output = batch["scheduler_output"]
-    prediction = model(model_input, t, mask)
+    doc_ids = batch["document_id"]
+    prediction, aux = model(model_input, t, mask, doc_ids)
     optim.zero_grad()
-    l = loss(scheduler_output, ground_truth, prediction, mask)
+    l = loss(scheduler_output, ground_truth, prediction, mask, aux, context.aux_weight)
     context.accelerator.backward(l)
+    if context.grad_clip_norm is not None and context.accelerator.sync_gradients:
+        context.accelerator.clip_grad_norm_(model.parameters(), context.grad_clip_norm)
     optim.step()
     if lr_scheduler is not None:
         lr_scheduler.step(metrics=l)
@@ -175,6 +191,7 @@ def test_step(context: TrainingContext, current_epoch: int):
     ground_truth = batch["ground_truth"]
     scheduler_output = batch["scheduler_output"]
     mask = batch["mask"]
+    doc_ids = batch["document_id"]
 
     batch_size, seq_len, K = model_input.shape
 
@@ -189,6 +206,7 @@ def test_step(context: TrainingContext, current_epoch: int):
         K=K,
         mask=mask,
         masked_input=model_input,
+        doc_ids=doc_ids,
         device=model_input.device,
         dtype=model_input.dtype,
     )
@@ -201,8 +219,8 @@ def test_step(context: TrainingContext, current_epoch: int):
 
     accuracy = match[mask].float().mean().item()
 
-    prediction = model(model_input, t, mask)
-    l = loss(scheduler_output, ground_truth, prediction, mask)
+    prediction, aux = model(model_input, t, mask, doc_ids)
+    l = loss(scheduler_output, ground_truth, prediction, mask, aux, context.aux_weight)
 
     context.log("test/loss", l.item(), current_epoch)
     context.log("test/accuracy", accuracy, current_epoch)
