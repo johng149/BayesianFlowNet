@@ -210,6 +210,13 @@ class DiscreteModel(nn.Module):
         unique_doc_ids, seq_lens = torch.unique_consecutive(doc_ids, return_counts=True)
 
         with torch.enable_grad():
+            # note: trying to update grad through original x instead of these embeddings
+            # complains about non-empty donated tensors or in the event you disable donated with
+            # torch._functorch.config.donated_buffer = False (pylance will complain that
+            # there is no _functorch nor config but it works at runtime), then you get
+            # that torch aot grad cannot handle double-backward. Not sure why,
+            # I assume something about original_x not being passed through the embedding
+            # layers causes this issue?
             x = self.token_emb(x)
             x = self.positional_emb(x, doc_ids)
             x = self.time_emb(x, t, mask)
@@ -217,7 +224,6 @@ class DiscreteModel(nn.Module):
             loss = 0.0
 
             for step in range(self.mcmc_steps):
-                x = x.detach().requires_grad_(True)
                 x = self.mcmc_emb(x, step)
 
                 # Pre Chunker
