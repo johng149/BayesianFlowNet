@@ -6,6 +6,7 @@ from torch import nn
 from torch.nn.attention.flex_attention import create_block_mask
 
 from src.nn.chunker import PackDynamicSequenceChunker
+from src.nn.ebm import EBM
 from src.nn.flex_transformer import TransformerBlock, causal, generate_doc_mask_mod
 
 
@@ -64,6 +65,18 @@ class DiscreteModel(nn.Module):
         self.use_chunkers = use_chunkers
 
         self.num_layers = layers + 2  # account for pre and post chunker layers
+
+        self.ebm = torch.compiler.disable(
+            EBM(
+                max_seq_len=max_seq_len,
+                K=K,
+                hidden_dim=hidden_dim,
+                num_heads=num_heads,
+                mamba_expand=mamba_expand,
+                dropout=dropout,
+            )
+        )
+
         self.emb = nn.Parameter(torch.randn(K, hidden_dim) * 0.02)
         self.pos_emb = nn.Parameter(torch.randn(max_seq_len, hidden_dim) * 0.02)
         self.time_rotary = SinusoidalTimeEmbedding(hidden_dim)
@@ -190,6 +203,8 @@ class DiscreteModel(nn.Module):
 
         unique_doc_ids, seq_lens = torch.unique_consecutive(doc_ids, return_counts=True)
 
+        x, ebm_logits, energy = self.ebm(x, t, mask, doc_ids)  # type: ignore
+
         x = self.token_emb(x)
         x = self.positional_emb(x, doc_ids)
         x = self.time_emb(x, t, mask)
@@ -245,4 +260,9 @@ class DiscreteModel(nn.Module):
 
         pred = x @ self.classifier
 
-        return pred, outputs.weighted_aux_ratio_loss if self.use_chunkers else 0.0
+        return (
+            pred,
+            outputs.weighted_aux_ratio_loss if self.use_chunkers else 0.0,
+            ebm_logits,
+            energy,
+        )

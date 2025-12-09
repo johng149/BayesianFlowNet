@@ -166,16 +166,24 @@ def train_step(context: TrainingContext, current_epoch: int):
     ground_truth = batch["ground_truth"]
     scheduler_output = batch["scheduler_output"]
     doc_ids = batch["document_id"]
-    prediction, aux = model(model_input, t, mask, doc_ids)
+    prediction, aux, ebm_logits, energy = model(model_input, t, mask, doc_ids)
     optim.zero_grad()
     l = loss(scheduler_output, ground_truth, prediction, mask, aux, context.aux_weight)
-    context.accelerator.backward(l)
+    ebm_l = loss(scheduler_output, ground_truth, ebm_logits, mask, aux, 0.0)
+
+    # we need to add a zero times energy.sum() to the backward call to
+    # ensure that the gradient is computed for energy when using FSDP, or DDP
+    # otherwise PyTorch will complain that reduction is not completed
+    # for prior iteration
+    context.accelerator.backward(l + ebm_l + (0.0 * energy.sum()))
     if context.grad_clip_norm is not None and context.accelerator.sync_gradients:
         context.accelerator.clip_grad_norm_(model.parameters(), context.grad_clip_norm)
     optim.step()
     if lr_scheduler is not None:
         lr_scheduler.step(metrics=l)
     context.log("train/loss", l.item(), current_epoch)
+    context.log("train/ebm_loss", ebm_l.item(), current_epoch)
+    context.log("train/total_loss", (l + ebm_l).item(), current_epoch)
 
 
 def test_step(context: TrainingContext, current_epoch: int):
@@ -197,7 +205,7 @@ def test_step(context: TrainingContext, current_epoch: int):
 
     steps = context.test_inference_steps
 
-    inference_result = inference(
+    inference_result, ebm_energy = inference(
         model=model,
         scheduler=scheduler,
         num_steps=steps,
@@ -219,11 +227,15 @@ def test_step(context: TrainingContext, current_epoch: int):
 
     accuracy = match[mask].float().mean().item()
 
-    prediction, aux = model(model_input, t, mask, doc_ids)
+    prediction, aux, emb_logits, ebm_energy = model(model_input, t, mask, doc_ids)
     l = loss(scheduler_output, ground_truth, prediction, mask, aux, context.aux_weight)
+    ebm_l = loss(scheduler_output, ground_truth, emb_logits, mask, aux, 0.0)
 
     context.log("test/loss", l.item(), current_epoch)
     context.log("test/accuracy", accuracy, current_epoch)
+    context.log("test/ebm_loss", ebm_l.item(), current_epoch)
+    context.log("test/total_loss", (l + ebm_l).item(), current_epoch)
+    context.log("test/final_energy", ebm_energy.sum().item(), current_epoch)
 
 
 def train(context: TrainingContext):

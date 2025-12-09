@@ -15,11 +15,12 @@ from src.training.train import train
 
 
 def main():
-    ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
+    # ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
     accelerator = Accelerator(
-        log_with="tensorboard", project_dir="./runs", kwargs_handlers=[ddp_kwargs]
+        log_with="tensorboard",
+        project_dir="./runs",  # kwargs_handlers=[ddp_kwargs]
     )
-    checkpoint_name = "shakespeare_byt5_packed_toggleable_chunker"
+    checkpoint_name = "shakespeare_byt5_packed_ebm"
     checkpoint_dir = "./checkpoints"
     batch_size = 256
     seq_len = 128
