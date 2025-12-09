@@ -28,6 +28,8 @@ def main():
     hidden_size = 768
     layers = 6
     heads = 12
+    use_chunkers = False
+    dropout = 0.1
     tk = Tk()
     vocab_size = tk.vocab_size()
     scheduler = Scheduler(20.4054 / vocab_size)
@@ -58,34 +60,14 @@ def main():
         hidden_dim=hidden_size,
         num_heads=heads,
         layers=layers,
-        dropout=0.1,
-        use_chunkers=False,
+        dropout=dropout,
+        use_chunkers=use_chunkers,
     )
 
     print(
         f"Created model with {sum(p.numel() for p in model.parameters())} parameters."
     )
 
-    # base_lr = 1e-5
-    # mamba_chunker_lr = 5e-6
-    # mamba_chunker_params = []
-    # base_params = []
-
-    # for name, param in model.named_parameters():
-    #     if any(
-    #         name.startswith(prefix)
-    #         for prefix in ["mamba_pre.", "mamba_post.", "chunker."]
-    #     ):
-    #         mamba_chunker_params.append(param)
-    #     else:
-    #         base_params.append(param)
-
-    # opt = Opt(
-    #     [
-    #         {"params": base_params, "lr": base_lr},
-    #         {"params": mamba_chunker_params, "lr": mamba_chunker_lr},
-    #     ]
-    # )
     opt = Opt(model.parameters(), lr=1e-4)
 
     lr_plateau = (
