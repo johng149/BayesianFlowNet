@@ -136,6 +136,13 @@ class EBM(nn.Module):
             original_x.requires_grad_(True)
             doc_ids = doc_ids.int()
 
+            # I was just thinking, what is stopping this energy based model from learning that
+            # whenever `original_x` is approximately one-hot, it must be that the noise is low
+            # and thus energy is low, and whenever `original_x` is more uniform, it must be that
+            # the noise is high, and thus energy is high. Maybe we can have a contrastive learning
+            # approach where we have input data such that we choose the "wrong" index to move
+            # towards the one-hot direction, thus the index indicated by the one-hot vector is not
+            # necessarily the correct token, see `dataset_helper.py` for implementation.
             x = self.token_emb(original_x)
             x = self.positional_emb(x, doc_ids)
             x = self.time_emb(x, t, mask)

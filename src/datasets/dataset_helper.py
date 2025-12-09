@@ -18,6 +18,7 @@ CollateOutput = TypedDict(
         "mask": Tensor,
         "scheduler_output": ScheduleOutput,
         "document_id": Tensor,
+        "contrastive_input": Tensor,
     },
 )
 
@@ -79,6 +80,8 @@ def make_collate_fn(
     min_mask_ratio: float = 0.0,
     max_mask_ratio: float = 0.95,
     mean_span_length: float = 3.0,
+    contrastive_corruption_prob_base: float = 0.3,
+    contrastive_corruption_prob_max: float = 0.9,
 ) -> Callable[[List[DatasetOutput]], CollateOutput]:
     """
     Resulting collate function encodes input into one-hot vectors assuming classes equal to vocab_size,
@@ -90,6 +93,9 @@ def make_collate_fn(
         - min_mask_ratio (float): Minimum masking ratio for input sequences.
         - max_mask_ratio (float): Maximum masking ratio for input sequences.
         - mean_span_length (float): Mean span length for masking.
+        - contrastive_corruption_prob_base (float): Base probability for corruption in contrastive input.
+            The probability increases with time linearly up to contrastive_corruption_prob_max.
+        - contrastive_corruption_prob_max (float): Maximum probability for corruption in contrastive input
     Returns:
         Collate function that can be used in a DataLoader.
     """
@@ -127,11 +133,33 @@ def make_collate_fn(
         packed_t = torch.cat(packed_t_list, dim=0)
         packed_mask = torch.cat(masks, dim=0)
 
+        # for each position, determine contrastive corruption probability based on time t
+        slope = (
+            contrastive_corruption_prob_max - contrastive_corruption_prob_base
+        ) / 1.0  # recall that t in [0, 1]
+        contrastive_corruption_probs = torch.clamp(
+            contrastive_corruption_prob_base + slope * packed_t, 0.0, 1.0
+        )
+        should_corrupt = packed_mask & (
+            torch.rand_like(packed_t) < contrastive_corruption_probs
+        )  # to corrupt, it needs to be masked and pass the prob check
+
+        random_indices = torch.randint(
+            0, vocab_size, packed_x_indices.shape, device=packed_x_indices.device
+        )
+        collision = random_indices == packed_x_indices
+        random_indices[collision] = (random_indices[collision] + 1) % vocab_size
+        contrastive_indices = torch.where(
+            should_corrupt, random_indices, packed_x_indices
+        )
+
         # One-hot encode x
         packed_x = F.one_hot(packed_x_indices, num_classes=vocab_size)
+        contrastive_x = F.one_hot(contrastive_indices, num_classes=vocab_size)
 
         # Add batch dimension (1, total_len, ...)
         packed_x = packed_x.unsqueeze(0)  # (1, total_len, vocab_size)
+        contrastive_x = contrastive_x.unsqueeze(0)  # (1, total_len, vocab_size)
         packed_doc_ids = packed_doc_ids.unsqueeze(0)  # (1, total_len)
         packed_t = packed_t.unsqueeze(0)  # (1, total_len)
         packed_mask = packed_mask.unsqueeze(0)  # (1, total_len)
@@ -143,8 +171,14 @@ def make_collate_fn(
         y_dist = y(packed_x, beta)
         model_input = theta(y_dist)
 
+        contrastive_y_dist = y(contrastive_x, beta)
+        contrastive_input = theta(contrastive_y_dist)
+
         # for each batch, for each sequence position, use `model_input` if mask is True else use `x`
         model_input = torch.where(packed_mask.unsqueeze(-1), model_input, packed_x)
+        contrastive_input = torch.where(
+            packed_mask.unsqueeze(-1), contrastive_input, packed_x
+        )
 
         return {
             "ground_truth": packed_x,
@@ -153,6 +187,7 @@ def make_collate_fn(
             "mask": packed_mask,
             "scheduler_output": scheduler_output,
             "document_id": packed_doc_ids,
+            "contrastive_input": contrastive_input,
         }
 
     return collate_fn

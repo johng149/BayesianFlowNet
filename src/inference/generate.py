@@ -503,4 +503,5 @@ def inference(
         algorithm="sde_euler",
         tk=tk,
     )
+    assert isinstance(ebm_energy, Tensor)
     return xt, ebm_energy

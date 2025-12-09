@@ -16,6 +16,7 @@ from src.checkpointing.checkpointing import load_checkpoint, save_checkpoint
 from src.datasets.dataset_helper import CollateOutput
 from src.inference.conditional import half_callback_maker
 from src.inference.generate import inference
+from src.nn.discrete_model import DiscreteModel
 from src.schedule.base import Scheduler
 from src.training.loss import loss
 
@@ -166,16 +167,21 @@ def train_step(context: TrainingContext, current_epoch: int):
     ground_truth = batch["ground_truth"]
     scheduler_output = batch["scheduler_output"]
     doc_ids = batch["document_id"]
+    contrastive_input = batch["contrastive_input"]
     prediction, aux, ebm_logits, energy = model(model_input, t, mask, doc_ids)
+    _, contrastive_ebm_logits, _ = model(contrastive_input, t, mask, doc_ids, just_ebm=True)  # type: ignore
     optim.zero_grad()
     l = loss(scheduler_output, ground_truth, prediction, mask, aux, context.aux_weight)
     ebm_l = loss(scheduler_output, ground_truth, ebm_logits, mask, aux, 0.0)
+    contrastive_ebm_l = loss(
+        scheduler_output, ground_truth, contrastive_ebm_logits, mask, aux, 0.0
+    )
 
     # we need to add a zero times energy.sum() to the backward call to
     # ensure that the gradient is computed for energy when using FSDP, or DDP
     # otherwise PyTorch will complain that reduction is not completed
     # for prior iteration
-    context.accelerator.backward(l + ebm_l + (0.0 * energy.sum()))
+    context.accelerator.backward(l + ebm_l + contrastive_ebm_l + (0.0 * energy.sum()))
     if context.grad_clip_norm is not None and context.accelerator.sync_gradients:
         context.accelerator.clip_grad_norm_(model.parameters(), context.grad_clip_norm)
     optim.step()
@@ -184,6 +190,7 @@ def train_step(context: TrainingContext, current_epoch: int):
     context.log("train/loss", l.item(), current_epoch)
     context.log("train/ebm_loss", ebm_l.item(), current_epoch)
     context.log("train/total_loss", (l + ebm_l).item(), current_epoch)
+    context.log("train/contrastive_ebm_loss", contrastive_ebm_l.item(), current_epoch)
 
 
 def test_step(context: TrainingContext, current_epoch: int):
@@ -200,6 +207,7 @@ def test_step(context: TrainingContext, current_epoch: int):
     scheduler_output = batch["scheduler_output"]
     mask = batch["mask"]
     doc_ids = batch["document_id"]
+    contrastive_input = batch["contrastive_input"]
 
     batch_size, seq_len, K = model_input.shape
 
@@ -227,15 +235,20 @@ def test_step(context: TrainingContext, current_epoch: int):
 
     accuracy = match[mask].float().mean().item()
 
-    prediction, aux, emb_logits, ebm_energy = model(model_input, t, mask, doc_ids)
+    prediction, aux, ebm_logits, _ = model(model_input, t, mask, doc_ids)
+    _, contrastive_ebm_logits, _ = model(contrastive_input, t, mask, doc_ids, just_ebm=True)  # type: ignore
     l = loss(scheduler_output, ground_truth, prediction, mask, aux, context.aux_weight)
-    ebm_l = loss(scheduler_output, ground_truth, emb_logits, mask, aux, 0.0)
+    ebm_l = loss(scheduler_output, ground_truth, ebm_logits, mask, aux, 0.0)
+    contrastive_ebm_l = loss(
+        scheduler_output, ground_truth, contrastive_ebm_logits, mask, aux, 0.0
+    )
 
     context.log("test/loss", l.item(), current_epoch)
     context.log("test/accuracy", accuracy, current_epoch)
     context.log("test/ebm_loss", ebm_l.item(), current_epoch)
     context.log("test/total_loss", (l + ebm_l).item(), current_epoch)
     context.log("test/final_energy", ebm_energy.sum().item(), current_epoch)
+    context.log("test/contrastive_ebm_loss", contrastive_ebm_l.item(), current_epoch)
 
 
 def train(context: TrainingContext):

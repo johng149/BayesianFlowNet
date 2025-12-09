@@ -188,7 +188,7 @@ class DiscreteModel(nn.Module):
 
         return x + time_embedding
 
-    def forward(self, x, t, mask, doc_ids):
+    def forward(self, x, t, mask, doc_ids, just_ebm: bool = False):
         batch_size, seq_len, K = x.shape
         assert mask.shape == (
             batch_size,
@@ -204,6 +204,8 @@ class DiscreteModel(nn.Module):
         unique_doc_ids, seq_lens = torch.unique_consecutive(doc_ids, return_counts=True)
 
         x, ebm_logits, energy = self.ebm(x, t, mask, doc_ids)  # type: ignore
+        if just_ebm:
+            return x, ebm_logits, energy
 
         x = self.token_emb(x)
         x = self.positional_emb(x, doc_ids)
