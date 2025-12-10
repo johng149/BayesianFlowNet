@@ -20,7 +20,7 @@ def main():
         log_with="tensorboard",
         project_dir="./runs",  # kwargs_handlers=[ddp_kwargs]
     )
-    checkpoint_name = "shakespeare_byt5_packed_ebm"
+    checkpoint_name = "shakespeare_byt5_packed_ebm3"
     checkpoint_dir = "./checkpoints"
     batch_size = 256
     seq_len = 128

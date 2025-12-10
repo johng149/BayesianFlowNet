@@ -41,7 +41,7 @@ class TrainingContext:
         metadata_save_file_name: str = "metadata.json",
         aux_weight: float = 0.03,  # weight for auxiliary loss
         grad_clip_norm: float | None = 1.0,
-        energy_magnitude_loss_weight: float = 1e-3,
+        energy_magnitude_loss_weight: float = 1e-4,
     ):
         assert (
             grad_clip_norm is None or grad_clip_norm > 0.0

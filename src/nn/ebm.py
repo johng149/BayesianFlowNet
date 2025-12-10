@@ -2,7 +2,8 @@ import math
 
 import torch
 from mamba_ssm import Mamba2
-from torch import nn
+from torch import Tensor, nn
+from torch.nn import functional as F
 
 
 class SinusoidalTimeEmbedding(nn.Module):
@@ -52,12 +53,17 @@ class EBM(nn.Module):
         dropout: float = 0.1,
         stepsize: float = 0.01,
         max_grad_change: float = 9.0,
+        steps: int = 2,
+        langevin_noise: float = 0.005,
     ):
         super().__init__()
         mamba_check(hidden_dim, num_heads, mamba_expand)
         assert hidden_dim % num_heads == 0, "hidden_dim must be divisble by num_heads"
+        assert steps >= 1, "steps must be at least 1"
         self.headdim = hidden_dim // num_heads
         self.max_grad_change = max_grad_change
+        self.steps = steps
+        self.langevin_noise = langevin_noise
 
         self.emb = nn.Parameter(torch.randn(K, hidden_dim) * 0.02)
         self.pos_emb = nn.Parameter(torch.randn(max_seq_len, hidden_dim) * 0.02)
@@ -89,7 +95,12 @@ class EBM(nn.Module):
             nn.Linear(hidden_dim * 3, hidden_dim),
         )
 
-        self.energy_head = nn.Linear(hidden_dim, 1)
+        # the energy head outputs energy for each of the K discrete tokens
+        # since lower energy means the token position is more correct, to get
+        # the actual logits, we need to negate the energy outputs. For example,
+        # if a token is assigned -10,000 energy it is very likely to be the correct token
+        # which means the logit should be 10,000 (very large positive number)
+        self.energy_head = nn.Linear(hidden_dim, K)
         self.mcmc_alpha = nn.Parameter(torch.tensor(stepsize), requires_grad=False)
 
     def token_emb(self, x):
@@ -133,49 +144,60 @@ class EBM(nn.Module):
 
         return x + time_embedding
 
+    def compute_energy(self, original_x, t, mask, doc_ids) -> Tensor:
+        x = self.token_emb(original_x)
+        x = self.positional_emb(x, doc_ids)
+        x = self.time_emb(x, t, mask)
+        x = self.norm(x)
+
+        residual = x
+
+        x = self.dropout(x)
+        x = self.mixer(x, seq_idx=doc_ids)  # pyright: ignore[reportCallIssue]
+        x = x + residual
+        x = self.dropout2(x)
+        x = x + self.mlp_out(self.norm2(x))
+
+        return self.energy_head(x)
+
     def forward(self, original_x, t, mask, doc_ids):
         with torch.enable_grad():
-            original_x.requires_grad_(True)
             doc_ids = doc_ids.int()
+            energy = self.compute_energy(original_x, t, mask, doc_ids)
+            logits = -energy
+            for step in range(self.steps):
+                logits = logits.requires_grad_(True)
+                probs = F.softmax(logits, dim=-1)
 
-            # I was just thinking, what is stopping this energy based model from learning that
-            # whenever `original_x` is approximately one-hot, it must be that the noise is low
-            # and thus energy is low, and whenever `original_x` is more uniform, it must be that
-            # the noise is high, and thus energy is high. Maybe we can have a contrastive learning
-            # approach where we have input data such that we choose the "wrong" index to move
-            # towards the one-hot direction, thus the index indicated by the one-hot vector is not
-            # necessarily the correct token, see `dataset_helper.py` for implementation.
-            x = self.token_emb(original_x)
-            x = self.positional_emb(x, doc_ids)
-            x = self.time_emb(x, t, mask)
-            x = self.norm(x)
+                # recalculate energy based on current probs
+                energy = self.compute_energy(probs, t, mask, doc_ids)
+                expected_energy = (probs * energy).sum(dim=-1).mean()
+                grad = torch.autograd.grad(
+                    expected_energy, logits, create_graph=self.training
+                )[0]
 
-            residual = x
+                if self.training:
+                    # during training, jitter the step size a little bit
+                    jitter = 1.0 + 0.1 * (
+                        torch.rand(1, device=grad.device) - 0.5
+                    )  # in [0.95, 1.05]
+                    step_size = self.mcmc_alpha * jitter
+                else:
+                    step_size = self.mcmc_alpha
+                min_max = self.max_grad_change / step_size
+                clamped_grad = torch.clamp(grad, min=-min_max, max=min_max)
+                logits = logits - step_size * clamped_grad
 
-            x = self.dropout(x)
-            x = self.mixer(x, seq_idx=doc_ids)  # pyright: ignore[reportCallIssue]
-            x = x + residual
-            x = self.dropout2(x)
-            x = x + self.mlp_out(self.norm2(x))
+                if self.training:
+                    noise_scale = self.langevin_noise * (1.0 - step / self.steps)
+                    logits = logits + torch.randn_like(logits) * noise_scale
 
-            energy = self.energy_head(x).view(-1, 1)
-            x_grad = torch.autograd.grad(
-                energy.sum(), original_x, create_graph=self.training
-            )[0]
-
-            # clamp the maximum change in gradient to prevent energy head
-            # from predicting massive values
-            min_max = self.max_grad_change / self.mcmc_alpha
-            x_grad = torch.clamp(x_grad, min=-min_max, max=min_max)
-
-            updated_x = (
-                original_x - self.mcmc_alpha * x_grad
-            )  # no longer between 0 and 1
+                logits = logits - logits.mean(dim=-1, keepdim=True)
 
             # the main BFN expects inputs to be between 0 and 1, and since updated_x is effectively
             # logits here, we just apply softmax
             return (
-                torch.softmax(updated_x, dim=-1),
-                updated_x,
-                energy,
+                torch.softmax(logits, dim=-1),
+                logits,
+                expected_energy,  # step is at least 1 so guaranteed to be defined
             )  # this updated_x is used for loss computation
