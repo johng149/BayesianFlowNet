@@ -1,5 +1,6 @@
 from sched import scheduler
 
+import torch
 from accelerate import Accelerator, DistributedDataParallelKwargs
 from torch.optim import AdamW as Opt
 from torch.optim.lr_scheduler import ReduceLROnPlateau as ReduceLR
@@ -20,9 +21,10 @@ def main():
         log_with="tensorboard",
         project_dir="./runs",  # kwargs_handlers=[ddp_kwargs]
     )
-    checkpoint_name = "shakespeare_byt5_packed_ebm3"
+    # torch.autograd.set_detect_anomaly(True)
+    checkpoint_name = "shakespeare_byt5_packed_ebm_rwkv"
     checkpoint_dir = "./checkpoints"
-    batch_size = 256
+    batch_size = 128
     seq_len = 128
     min_t = 1e-8
     num_workers = 3

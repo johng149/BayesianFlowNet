@@ -9,3 +9,4 @@
 - Isotropic activation functions: Basically, the idea is what if activation functions act on the entire vector by using its magnitude rather than elementwise. It supposedly helps by avoiding the inductive bias of elementwise activations. Does not converge, absolute dog.
 - Elephant activation functions: Supposedly the sparser gradients helps with continual learning and avoiding catastrophic forgetting. Convergence is slightly worse, and training speed is slightly worse. Perhaps if the dataset was huge it would make a difference, but so far my model is large enough to overfit the dataset so I don't see any benefit here.
 - Sequence packing: About 17% faster training speed, converge is the same since mathematically it is equivalent.
+- RWKV7 instead of Mamba2: Had to halve the batch size to prevent OOM, and training speed still wasn't any faster. Absolute dog in that regard, I'm not waiting around to see if convergence is any different.

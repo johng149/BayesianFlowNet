@@ -5,6 +5,8 @@ from mamba_ssm import Mamba2
 from torch import Tensor, nn
 from torch.nn import functional as F
 
+from src.nn.rwkv import RWKV
+
 
 class SinusoidalTimeEmbedding(nn.Module):
     def __init__(self, dim):
@@ -55,9 +57,11 @@ class EBM(nn.Module):
         max_grad_change: float = 9.0,
         steps: int = 2,
         langevin_noise: float = 0.005,
+        use_mamba: bool = False,
     ):
         super().__init__()
-        mamba_check(hidden_dim, num_heads, mamba_expand)
+        if use_mamba:
+            mamba_check(hidden_dim, num_heads, mamba_expand)
         assert hidden_dim % num_heads == 0, "hidden_dim must be divisble by num_heads"
         assert steps >= 1, "steps must be at least 1"
         self.headdim = hidden_dim // num_heads
@@ -83,6 +87,11 @@ class EBM(nn.Module):
                 d_state=16,
                 d_conv=4,
                 expand=mamba_expand,
+            )
+            if use_mamba
+            else RWKV(
+                hidden_dim=hidden_dim,
+                num_heads=num_heads,
             )
         )
 
@@ -161,10 +170,20 @@ class EBM(nn.Module):
         return self.energy_head(x)
 
     def forward(self, original_x, t, mask, doc_ids):
+
+        # we need the original logits as this wil be used to ensure that at each MCMC
+        # step, the logits predicted by the energy head have the unmasked positions set
+        # to prevent energy head from inadvertently changing unmasked positions
+        # as that would be changing the input prompt
+        original_logits = torch.zeros_like(original_x)
+        original_logits = torch.scatter(
+            original_logits, -1, original_x.argmax(dim=-1, keepdim=True), 1e9
+        )
         with torch.enable_grad():
             doc_ids = doc_ids.int()
             energy = self.compute_energy(original_x, t, mask, doc_ids)
             logits = -energy
+            logits = torch.where(mask.unsqueeze(-1), logits, original_logits)
             for step in range(self.steps):
                 logits = logits.requires_grad_(True)
                 probs = F.softmax(logits, dim=-1)
@@ -193,6 +212,7 @@ class EBM(nn.Module):
                     logits = logits + torch.randn_like(logits) * noise_scale
 
                 logits = logits - logits.mean(dim=-1, keepdim=True)
+                logits = torch.where(mask.unsqueeze(-1), logits, original_logits)
 
             # the main BFN expects inputs to be between 0 and 1, and since updated_x is effectively
             # logits here, we just apply softmax
