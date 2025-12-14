@@ -437,6 +437,7 @@ def sample(
     xt = prior
     data_pred_last = None
     ebm_energy = None
+    initial_ebm_energy = None
     for step in range(steps):
         if algorithm == "sde_euler":
             xt, _, ebm_energy = solver.sde_euler_update(
@@ -470,7 +471,9 @@ def sample(
             raise NotImplementedError
         if tk is not None and (step % (steps // 10) == 0 or step == steps - 1):
             print(f"Step {step + 1}: {tk.decode(torch.argmax(xt, dim=-1)[0].cpu())}")
-    return xt, ebm_energy
+        if initial_ebm_energy is None:
+            initial_ebm_energy = ebm_energy
+    return xt, ebm_energy, initial_ebm_energy
 
 
 def inference(
@@ -490,7 +493,7 @@ def inference(
     solver = TextBFNSolver(
         model, class_num=K, num_steps=num_steps, max_sqrt_beta=(20.4054 / K) ** 0.5
     )
-    xt, ebm_energy = sample(
+    xt, ebm_energy, initial_ebm_energy = sample(
         solver,
         batch_size,
         seq_len,
@@ -504,4 +507,5 @@ def inference(
         tk=tk,
     )
     assert isinstance(ebm_energy, Tensor)
-    return xt, ebm_energy
+    assert isinstance(initial_ebm_energy, Tensor)
+    return xt, ebm_energy, initial_ebm_energy

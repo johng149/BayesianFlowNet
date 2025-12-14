@@ -165,6 +165,12 @@ class EBM(nn.Module):
             doc_ids = doc_ids.int()
             energy = self.compute_energy(original_x, t, mask, doc_ids)
             logits = -energy
+
+            with torch.no_grad():
+                initial_probs = F.softmax(logits, dim=-1)
+                initial_expected_energy = (initial_probs * energy).sum(dim=-1).mean()
+                scale_factor = 1.0 / (initial_probs.size(0) * initial_probs.size(1))
+
             for step in range(self.steps):
                 logits = logits.requires_grad_(True)
                 probs = F.softmax(logits, dim=-1)
@@ -172,9 +178,10 @@ class EBM(nn.Module):
                 # recalculate energy based on current probs
                 energy = self.compute_energy(probs, t, mask, doc_ids)
                 expected_energy = (probs * energy).sum(dim=-1).mean()
-                grad = torch.autograd.grad(
-                    expected_energy, logits, create_graph=self.training
-                )[0]
+                # grad = torch.autograd.grad(
+                #     expected_energy, logits, create_graph=self.training
+                # )[0]
+                grad = (probs * (energy - expected_energy)) * scale_factor
 
                 if self.training:
                     # during training, jitter the step size a little bit
