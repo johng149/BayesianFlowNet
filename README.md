@@ -1,4 +1,4 @@
-`TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1 accelerate launch --config_file ./ddp.yaml main.py`
+`FLASH_ATTENTION_TRITON_AMD_ENABLE=TRUE TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1 accelerate launch --config_file ddp_dynamo_bf16.yaml main.py`
 
 ### Findings
 

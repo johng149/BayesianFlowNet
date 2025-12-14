@@ -1,3 +1,5 @@
+import os
+import subprocess
 from sched import scheduler
 
 from accelerate import Accelerator, DistributedDataParallelKwargs
@@ -14,13 +16,50 @@ from src.training.train import TrainingContext as Context
 from src.training.train import train
 
 
+def check_gpu_type():
+    """Check if GPU is NVIDIA or AMD"""
+    try:
+        # Check for NVIDIA GPU
+        result = subprocess.run(["nvidia-smi"], capture_output=True, text=True)
+        if result.returncode == 0:
+            print("GPU Type: NVIDIA")
+            return "NVIDIA"
+    except FileNotFoundError:
+        pass
+
+    try:
+        # Check for AMD GPU
+        result = subprocess.run(["rocm-smi"], capture_output=True, text=True)
+        if result.returncode == 0:
+            print("GPU Type: AMD")
+            # we need to check FLASH_ATTENTION_TRITON_AMD_ENABLE=TRUE for flash attention on AMD
+            if os.environ.get("FLASH_ATTENTION_TRITON_AMD_ENABLE", "FALSE") != "TRUE":
+                raise RuntimeError(
+                    "For AMD GPUs, please set the environment variable FLASH_ATTENTION_TRITON_AMD_ENABLE=TRUE "
+                    "to enable Flash Attention with Triton on AMD."
+                )
+            # and also set pytorch's version to use experimental attention
+            if os.environ.get("TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL", "0") != "1":
+                raise RuntimeError(
+                    "For AMD GPUs, please set the environment variable TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1 "
+                    "to enable Flash Attention with Triton on AMD."
+                )
+            return "AMD"
+    except FileNotFoundError:
+        pass
+
+    print("No GPU detected or unsupported GPU type")
+    return None
+
+
 def main():
+    check_gpu_type()
     # ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
     accelerator = Accelerator(
         log_with="tensorboard",
         project_dir="./runs",  # kwargs_handlers=[ddp_kwargs]
     )
-    checkpoint_name = "shakespeare_byt5_packed_ebm3"
+    checkpoint_name = "shakespeare_byt5_packed_ebm3_pillarman"
     checkpoint_dir = "./checkpoints"
     batch_size = 256
     seq_len = 128

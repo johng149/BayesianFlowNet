@@ -5,6 +5,8 @@ from mamba_ssm import Mamba2
 from torch import Tensor, nn
 from torch.nn import functional as F
 
+from src.nn.columnar import PillarMan
+
 
 class SinusoidalTimeEmbedding(nn.Module):
     def __init__(self, dim):
@@ -55,9 +57,11 @@ class EBM(nn.Module):
         max_grad_change: float = 9.0,
         steps: int = 2,
         langevin_noise: float = 0.005,
+        use_mamba: bool = False,
     ):
         super().__init__()
-        mamba_check(hidden_dim, num_heads, mamba_expand)
+        if use_mamba:
+            mamba_check(hidden_dim, num_heads, mamba_expand)
         assert hidden_dim % num_heads == 0, "hidden_dim must be divisble by num_heads"
         assert steps >= 1, "steps must be at least 1"
         self.headdim = hidden_dim // num_heads
@@ -76,15 +80,20 @@ class EBM(nn.Module):
         self.norm = nn.RMSNorm(hidden_dim)
         self.dropout = nn.Dropout(dropout)
 
-        self.mixer = torch.compiler.disable(
-            Mamba2(
-                d_model=hidden_dim,
-                headdim=self.headdim,
-                d_state=16,
-                d_conv=4,
-                expand=mamba_expand,
+        if use_mamba:
+            self.mixer = torch.compiler.disable(
+                Mamba2(
+                    d_model=hidden_dim,
+                    headdim=self.headdim,
+                    d_state=16,
+                    d_conv=4,
+                    expand=mamba_expand,
+                )
             )
-        )
+        else:
+            self.mixer = torch.compiler.disable(
+                PillarMan(hidden_dim=hidden_dim, num_heads=num_heads)
+            )
 
         self.dropout2 = nn.Dropout(dropout)
         self.norm2 = nn.RMSNorm(hidden_dim)
