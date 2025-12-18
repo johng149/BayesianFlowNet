@@ -1,4 +1,4 @@
-from typing import Callable, NewType
+from typing import Callable, List, NewType
 
 import torch
 from torch import Tensor
@@ -165,7 +165,8 @@ class TextBFNSolver:
                     x_s
                     + g**2 * (data_pred - 1 / self.K) * self.delta_t
                     + g * self.delta_t**0.5 * noise
-                )  # FIXME: do we return logits or x_t here???
+                )  # Well apparently we just return logits, so not sure
+                # what this new x_t calculation is supposed to be for...
                 return logits, data_pred, energy
 
     def ode_euler_update(
@@ -383,6 +384,10 @@ class TextBFNSolver:
                     * D1
                     + (self.K * (beta_t - beta_s)) ** 0.5 * noise
                 )
+                theta = F.softmax(x_t, -1)
+                theta = torch.where(mask.unsqueeze(-1), theta, model_input)
+                logits, _, _, energy = self.unet(theta, t, mask, doc_ids)
+                data_pred_s = F.softmax(logits, -1)
                 return x_t, data_pred_s, energy
 
     def sde_bfnsolver1_update(
@@ -430,6 +435,7 @@ def sample(
     steps: int = 100,
     algorithm: str = "sde_euler",
     tk: TokenizerBase | None = None,
+    energy_tracker: List[float] | None = None,
 ):
     beta_t = (solver.max_sqrt_beta * solver.eta) ** 2
     std_t = (K * beta_t) ** 0.5
@@ -437,6 +443,7 @@ def sample(
     xt = prior
     data_pred_last = None
     ebm_energy = None
+    prev_energy = None
     initial_ebm_energy = None
     for step in range(steps):
         if algorithm == "sde_euler":
@@ -473,6 +480,16 @@ def sample(
             print(f"Step {step + 1}: {tk.decode(torch.argmax(xt, dim=-1)[0].cpu())}")
         if initial_ebm_energy is None:
             initial_ebm_energy = ebm_energy
+        if energy_tracker is not None:
+            energy_tracker.append(ebm_energy.mean().item())
+        # if (
+        #     step >= steps * 0.82
+        #     and prev_energy is not None
+        #     and prev_energy < ebm_energy
+        # ):
+        #     break
+        prev_energy = ebm_energy
+
     return xt, ebm_energy, initial_ebm_energy
 
 
@@ -489,6 +506,8 @@ def inference(
     device: torch.device,
     dtype: torch.dtype = torch.float32,
     tk: TokenizerBase | None = None,
+    algorithm="sde_euler",
+    energy_tracker: List[float] | None = None,
 ):
     solver = TextBFNSolver(
         model, class_num=K, num_steps=num_steps, max_sqrt_beta=(20.4054 / K) ** 0.5
@@ -503,8 +522,9 @@ def inference(
         doc_ids,
         device,
         steps=num_steps,
-        algorithm="sde_euler",
+        algorithm=algorithm,
         tk=tk,
+        energy_tracker=energy_tracker,
     )
     assert isinstance(ebm_energy, Tensor)
     assert isinstance(initial_ebm_energy, Tensor)

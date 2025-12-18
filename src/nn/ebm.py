@@ -203,6 +203,7 @@ class EBM(nn.Module):
 
             # the main BFN expects inputs to be between 0 and 1, and since updated_x is effectively
             # logits here, we just apply softmax
+            # note, expected_energy ndim is 0 (it is just a scalar tensor)
             return (
                 torch.softmax(logits, dim=-1),
                 logits,
