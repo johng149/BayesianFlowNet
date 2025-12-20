@@ -1,4 +1,5 @@
 import math
+import random
 
 import torch
 from mamba_ssm import Mamba2
@@ -170,8 +171,10 @@ class EBM(nn.Module):
                 initial_probs = F.softmax(logits, dim=-1)
                 initial_expected_energy = (initial_probs * energy).sum(dim=-1).mean()
                 scale_factor = 1.0 / (initial_probs.size(0) * initial_probs.size(1))
-
-            for step in range(self.steps):
+            steps = (
+                self.steps if not self.training else random.randint(1, self.steps + 1)
+            )
+            for step in range(steps):
                 logits = logits.requires_grad_(True)
                 probs = F.softmax(logits, dim=-1)
 

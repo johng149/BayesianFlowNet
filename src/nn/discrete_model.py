@@ -76,6 +76,12 @@ class DiscreteModel(nn.Module):
                 dropout=dropout,
             )
         )
+        self.ebm_residual = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.GELU(),
+            nn.Linear(hidden_dim, hidden_dim),
+        )
+        self.ebm_norm = nn.RMSNorm(hidden_dim)
 
         self.emb = nn.Parameter(torch.randn(K, hidden_dim) * 0.02)
         self.pos_emb = nn.Parameter(torch.randn(max_seq_len, hidden_dim) * 0.02)
@@ -203,13 +209,20 @@ class DiscreteModel(nn.Module):
 
         unique_doc_ids, seq_lens = torch.unique_consecutive(doc_ids, return_counts=True)
 
-        x, ebm_logits, energy = self.ebm(x, t, mask, doc_ids)  # type: ignore
+        ebmx, ebm_logits, energy = self.ebm(x, t, mask, doc_ids)  # type: ignore
         if just_ebm:
-            return x, ebm_logits, energy
+            return ebmx, ebm_logits, energy
 
         x = self.token_emb(x)
         x = self.positional_emb(x, doc_ids)
         x = self.time_emb(x, t, mask)
+
+        embx = self.token_emb(ebmx)
+        embx = self.positional_emb(embx, doc_ids)
+        embx = self.time_emb(embx, t, mask)
+
+        x = x + self.ebm_residual(embx)
+        x = self.ebm_norm(x)
 
         # Pre Chunker
         x = self.pre_chunker(x, seq_idx=doc_ids) if self.use_chunkers else x  # type: ignore

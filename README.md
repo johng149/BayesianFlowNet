@@ -1,5 +1,7 @@
 `TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1 accelerate launch --config_file ./ddp.yaml main.py`
 
+`FLASH_ATTENTION_TRITON_AMD_ENABLE=TRUE TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1 accelerate launch --config_file ddp_dynamo_bf16.yaml main.py`
+
 ### Findings
 
 - Dynamic chunker: absolute dog when encoder / decoder is not SSM based layer such as Mamba. Even after switching to Mamba2, it slows down training speed and convergence. I suppose one could argue that at larger sequence lengths it might help training speed and convergence because the heavy transformer layers do not run on entire sequence, but I have no idea if that is true.
