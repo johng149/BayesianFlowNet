@@ -220,7 +220,7 @@ def test_step(context: TrainingContext, current_epoch: int):
 
     steps = context.test_inference_steps
 
-    inference_result, ebm_energy, initial_emb_energy = inference(
+    inference_result, ebm_energy, initial_ebm_energy = inference(
         model=model,
         scheduler=scheduler,
         num_steps=steps,
@@ -255,13 +255,13 @@ def test_step(context: TrainingContext, current_epoch: int):
     context.log("test/ebm_loss", ebm_l.item(), current_epoch)
     context.log("test/total_loss", (l + ebm_l).item(), current_epoch)
     context.log("test/final_energy", ebm_energy.sum().item(), current_epoch)
-    context.log("test/initial_energy", initial_emb_energy.sum().item(), current_epoch)
+    context.log("test/initial_energy", initial_ebm_energy.sum().item(), current_epoch)
     context.log(
         # ideally, the initial energy should always be higher than the final energy, so
         # if we log the difference here, it should be positive. Not being positive indicates
         # that the EBM is not working as intended.
         "test/energy_difference",
-        (initial_emb_energy - ebm_energy).sum().item(),
+        (initial_ebm_energy - ebm_energy).sum().item(),
         current_epoch,
     )
     context.log("test/contrastive_ebm_loss", contrastive_ebm_l.item(), current_epoch)

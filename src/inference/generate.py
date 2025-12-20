@@ -69,17 +69,18 @@ def inference(
     algorithm="sde_euler",
     energy_tracker: List[float] | None = None,
 ):
-    xt = generative_prior(batch_size, seq_len, K, device, dtype)
-    total_iterations = torch.ones(batch_size, seq_len, device=device) * num_steps
-    energy = None
-    initial_ebm_energy = None
-    for step in range(1, num_steps + 1):
-        current_iteration = torch.ones_like(total_iterations) * step
-        curr_t = dis_t(current_iteration, total_iterations)
-        xt, energy = ode_euler(model, curr_t, xt, mask, doc_ids, masked_input)
-        if initial_ebm_energy is None:
-            initial_ebm_energy = energy
-        if energy_tracker is not None:
-            energy_tracker.append(energy.mean().item())
-    assert energy is not None and initial_ebm_energy is not None
-    return xt, energy, initial_ebm_energy
+    with torch.no_grad():
+        xt = generative_prior(batch_size, seq_len, K, device, dtype)
+        total_iterations = torch.ones(batch_size, seq_len, device=device) * num_steps
+        energy = None
+        initial_ebm_energy = None
+        for step in range(1, num_steps + 1):
+            current_iteration = torch.ones_like(total_iterations) * step
+            curr_t = dis_t(current_iteration, total_iterations)
+            xt, energy = ode_euler(model, curr_t, xt, mask, doc_ids, masked_input)
+            if initial_ebm_energy is None:
+                initial_ebm_energy = energy
+            if energy_tracker is not None:
+                energy_tracker.append(energy.mean().item())
+        assert energy is not None and initial_ebm_energy is not None
+        return xt, energy, initial_ebm_energy

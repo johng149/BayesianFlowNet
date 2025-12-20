@@ -162,53 +162,66 @@ class EBM(nn.Module):
         return self.energy_head(x)
 
     def forward(self, original_x, t, mask, doc_ids):
-        with torch.enable_grad():
-            doc_ids = doc_ids.int()
-            energy = self.compute_energy(original_x, t, mask, doc_ids)
-            logits = -energy
+        doc_ids = doc_ids.int()
+        energy = self.compute_energy(original_x, t, mask, doc_ids)
+        logits = -energy
+        batch_size, seq_len, K = logits.shape
+        num_docs = doc_ids.max().item() + 1
+        expanded_doc_ids = doc_ids.expand(batch_size, -1)
 
-            with torch.no_grad():
-                initial_probs = F.softmax(logits, dim=-1)
-                initial_expected_energy = (initial_probs * energy).sum(dim=-1).mean()
-                scale_factor = 1.0 / (initial_probs.size(0) * initial_probs.size(1))
-            steps = (
-                self.steps if not self.training else random.randint(1, self.steps + 1)
-            )
-            for step in range(steps):
-                logits = logits.requires_grad_(True)
-                probs = F.softmax(logits, dim=-1)
+        with torch.no_grad():
+            initial_probs = F.softmax(logits, dim=-1)
+            initial_expected_energy = (initial_probs * energy).sum(dim=-1).mean()
+            scale_factor = 1.0 / (initial_probs.size(0) * initial_probs.size(1))
+        steps = self.steps if not self.training else random.randint(1, self.steps + 1)
+        for step in range(steps):
+            logits = logits.requires_grad_(True)
+            probs = F.softmax(logits, dim=-1)
 
-                # recalculate energy based on current probs
-                energy = self.compute_energy(probs, t, mask, doc_ids)
-                expected_energy = (probs * energy).sum(dim=-1).mean()
-                # grad = torch.autograd.grad(
-                #     expected_energy, logits, create_graph=self.training
-                # )[0]
-                grad = (probs * (energy - expected_energy)) * scale_factor
+            # recalculate energy based on current probs
+            energy = self.compute_energy(probs, t, mask, doc_ids)
+            per_token_expected_energy = (probs * energy).sum(dim=-1)
 
-                if self.training:
-                    # during training, jitter the step size a little bit
-                    jitter = 1.0 + 0.1 * (
-                        torch.rand(1, device=grad.device) - 0.5
-                    )  # in [0.95, 1.05]
-                    step_size = self.mcmc_alpha * jitter
-                else:
-                    step_size = self.mcmc_alpha
-                min_max = self.max_grad_change / step_size
-                clamped_grad = torch.clamp(grad, min=-min_max, max=min_max)
-                logits = logits - step_size * clamped_grad
+            # while we could use the full `energy` tensor without reduction, doing
+            # so would slow down training because PyTorch needs to track the gradient flow
+            # of b x s x k tensor. By reducing it to b x num_docs, it simplifies the
+            # chain rule computation. Essentially,  this moves the reduction from
+            # autograd engine to cuda kernel (scatter_add), which is more efficient.
+            doc_energy = torch.zeros(batch_size, num_docs, device=logits.device)
+            doc_energy.scatter_add_(1, expanded_doc_ids, per_token_expected_energy)
+            doc_counts = torch.zeros(batch_size, num_docs, device=logits.device)
+            ones = torch.ones_like(per_token_expected_energy)
+            doc_counts.scatter_add_(1, expanded_doc_ids, ones)
+            doc_energy = doc_energy / doc_counts.clamp(min=1.0)
 
-                if self.training:
-                    noise_scale = self.langevin_noise * (1.0 - step / self.steps)
-                    logits = logits + torch.randn_like(logits) * noise_scale
+            expected_energy = per_token_expected_energy.mean()
+            # grad = torch.autograd.grad(
+            #     expected_energy, logits, create_graph=self.training
+            # )[0]
+            grad = (probs * (energy - expected_energy)) * scale_factor
 
-                logits = logits - logits.mean(dim=-1, keepdim=True)
+            if self.training:
+                # during training, jitter the step size a little bit
+                jitter = 1.0 + 0.1 * (
+                    torch.rand(1, device=grad.device) - 0.5
+                )  # in [0.95, 1.05]
+                step_size = self.mcmc_alpha * jitter
+            else:
+                step_size = self.mcmc_alpha
+            min_max = self.max_grad_change / step_size
+            clamped_grad = torch.clamp(grad, min=-min_max, max=min_max)
+            logits = logits - step_size * clamped_grad
 
-            # the main BFN expects inputs to be between 0 and 1, and since updated_x is effectively
-            # logits here, we just apply softmax
-            # note, expected_energy ndim is 0 (it is just a scalar tensor)
-            return (
-                torch.softmax(logits, dim=-1),
-                logits,
-                expected_energy,  # step is at least 1 so guaranteed to be defined
-            )  # this updated_x is used for loss computation
+            if self.training:
+                noise_scale = self.langevin_noise * (1.0 - step / self.steps)
+                logits = logits + torch.randn_like(logits) * noise_scale
+
+            logits = logits - logits.mean(dim=-1, keepdim=True)
+
+        # the main BFN expects inputs to be between 0 and 1, and since updated_x is effectively
+        # logits here, we just apply softmax
+        return (
+            torch.softmax(logits, dim=-1),
+            logits,
+            doc_energy,
+        )  # this updated_x is used for loss computation
