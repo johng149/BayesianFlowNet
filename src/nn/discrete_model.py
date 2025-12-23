@@ -63,6 +63,7 @@ class DiscreteModel(nn.Module):
         assert hidden_dim % num_heads == 0, "hidden_dim must be divisble by num_heads"
         self.headdim = hidden_dim // num_heads
         self.use_chunkers = use_chunkers
+        self.max_seq_len = max_seq_len
 
         self.num_layers = layers + 2  # account for pre and post chunker layers
 
@@ -196,6 +197,9 @@ class DiscreteModel(nn.Module):
 
     def forward(self, x, t, mask, doc_ids, just_ebm: bool = False):
         batch_size, seq_len, K = x.shape
+        assert (
+            seq_len <= self.max_seq_len
+        ), f"Your input is too fat! Max seq len is {self.max_seq_len}, got {seq_len}."
         assert mask.shape == (
             batch_size,
             seq_len,
