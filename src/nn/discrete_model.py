@@ -158,6 +158,7 @@ class DiscreteModel(nn.Module):
         return x @ self.emb
 
     def positional_emb(self, x, doc_ids):
+        batch_size, seq_len = doc_ids.shape
         is_new_group = torch.cat(
             [
                 torch.ones_like(doc_ids[:, :1], dtype=torch.bool),
@@ -167,6 +168,7 @@ class DiscreteModel(nn.Module):
         )
         # Get the indices where new groups start
         group_start_indices = torch.where(is_new_group)[1]
+        group_start_indices = group_start_indices.view(batch_size, -1)
 
         # Broadcast subtraction: subtract the start index of current group from position
         positions = (
@@ -178,6 +180,10 @@ class DiscreteModel(nn.Module):
         group_starts[:, is_new_group[0]] = group_start_indices
         group_starts = group_starts.cummax(dim=1)[0]  # Forward fill the start indices
         positions = positions - group_starts  # (1, seq_len)
+
+        assert (
+            positions.max() < self.max_seq_len
+        ), f"Your input is too fat! Position index {positions.max().item()} exceeds max_seq_len {self.max_seq_len}"
 
         pos_embedding = self.pos_emb[positions]  # shape is (1, total_len, hidden_dim)
         return x + pos_embedding
@@ -197,17 +203,14 @@ class DiscreteModel(nn.Module):
 
     def forward(self, x, t, mask, doc_ids, just_ebm: bool = False):
         batch_size, seq_len, K = x.shape
-        assert (
-            seq_len <= self.max_seq_len
-        ), f"Your input is too fat! Max seq len is {self.max_seq_len}, got {seq_len}."
         assert mask.shape == (
             batch_size,
             seq_len,
         ), f"mask shape {mask.shape} does not match input shape {x.shape} on the batch and seq len dimensions"
-        assert doc_ids.shape == (
-            batch_size,
-            seq_len,
-        ), f"doc_ids shape {doc_ids.shape} does not match input shape {x.shape} on the batch and seq len dimensions"
+        # assert doc_ids.shape == (
+        #     batch_size,
+        #     seq_len,
+        # ), f"doc_ids shape {doc_ids.shape} does not match input shape {x.shape} on the batch and seq len dimensions"
 
         doc_ids = doc_ids.int()
 
@@ -242,6 +245,19 @@ class DiscreteModel(nn.Module):
             if self.use_chunkers
             else outputs.unsqueeze(0)
         )  # (1, total_len, D)
+        if x_down.ndim == 4:
+            """
+            You might be wondering how it is possible to end up with a 4D tensor here.
+            This can happen if the input to this model has batch size greater than 1.
+            Which in turn happens if we are trying to use test-time scaling by searching
+            across different dimensions, so we go from a packed tensor of shape
+            (1, SeqLen, D) to (NumBranches, SeqLen, D)
+
+            If that happens the output at this point will be of shape
+            (1, NumBranches, ChunkedSeqLen, D) so we need a squeeze to get back to
+            (NumBranches, ChunkedSeqLen, D)
+            """
+            x_down = x_down.squeeze(0)
 
         with torch.no_grad():
             if self.use_chunkers:
@@ -276,6 +292,14 @@ class DiscreteModel(nn.Module):
 
         # Mamba Post
         x = self.post_chunker(x_up.unsqueeze(0), seq_idx=doc_ids) if self.use_chunkers else x_up.unsqueeze(0)  # type: ignore
+
+        if x.ndim == 4:
+            """
+            Similar to the earlier case, if we have multiple branches due to test-time
+            scaling, we might end up with a 4D tensor here. So we squeeze to get back
+            to (NumBranches, SeqLen, D)
+            """
+            x = x.squeeze(0)
 
         pred = x @ self.classifier
 

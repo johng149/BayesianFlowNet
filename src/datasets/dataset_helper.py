@@ -1,3 +1,4 @@
+import random
 from typing import Callable, List, TypedDict
 
 import numpy as np
@@ -28,6 +29,80 @@ from abc import ABC
 class BFNDataset(ABC):
     def __getitem__(self, index: int) -> DatasetOutput:
         raise NotImplementedError
+
+
+import torch
+from einops import rearrange
+
+
+def stratified_window(
+    logits,
+    num_samples: int,
+    left: float = 0.0,
+    right: float = 1.0,
+    is_probs: bool = False,
+    temperature: float = 1.0,
+):
+    """
+    Samples from a specified window [left, right] of stratified probabilities.
+    If left=0.0 and right=1.0, this is equal to normal sampling with given
+    temperature. While left=0.0 and right=0.0 is greedy sampling.
+
+    The temperature parameter will only be used if the input is logits.
+
+    Args:
+        logits: (Batch, Seq, Vocab)
+        num_samples: How many samples to draw from the specified window.
+        left: The start of the probability range (0.0 = most likely).
+        right: The end of the probability range (1.0 = least likely).
+    """
+    left = min(max(left, 0.0), 1.0)
+    right = min(max(right, 0.0), 1.0)
+    assert left <= right, "Left boundary must be less than or equal to right boundary."
+
+    if not is_probs:
+        probs = torch.softmax(logits / temperature, dim=-1)
+    else:
+        probs = logits
+
+    # 1. Sort probabilities descending so that 'left=0' is the most likely token
+    probs_sorted, indices_sorted = torch.sort(probs, dim=-1, descending=True)
+
+    # 2. Compute CDF on the sorted tokens
+    cdf = probs_sorted.cumsum(dim=-1)
+
+    # 3. Define the window width
+    window_width = right - left
+
+    # 4. Generate stratified noise within the [left, right] range
+    # If num_samples=1, left=0.1, right=0.2:
+    # u will be in [0, 1], then scaled to [0, 0.1], then shifted to [0.1, 0.2]
+    *batch_dims, seq_len, vocab_size = cdf.shape
+    u = torch.rand(*batch_dims, seq_len, num_samples, device=logits.device)
+
+    # This formula splits the window [left, right] into 'num_samples' equal strata
+    # and picks one random point from each.
+    strata_steps = torch.arange(num_samples, device=logits.device)
+    strata = left + (strata_steps + u) / num_samples * window_width
+
+    # 5. Find the indices in the sorted distribution
+    # searchsorted finds the first index where cdf >= strata
+    sampled_sorted_indices = torch.searchsorted(cdf, strata)
+    sampled_sorted_indices = sampled_sorted_indices.clamp(max=vocab_size - 1)
+
+    # 6. Map back to original vocabulary indices
+    # indices_sorted is (Batch, Seq, Vocab), we need to gather from it
+    # We need to expand indices_sorted to match the num_samples dimension
+    # or use gather carefully.
+
+    # Flatten batch/seq for easier gathering
+    flat_indices_sorted = rearrange(indices_sorted, "b s v -> (b s) v")
+    flat_sampled_indices = rearrange(sampled_sorted_indices, "b s n -> (b s) n")
+
+    # Gather the actual token IDs
+    samples = torch.gather(flat_indices_sorted, dim=1, index=flat_sampled_indices)
+
+    return rearrange(samples, "(b s) n -> (b n) s", b=batch_dims[0])
 
 
 def generate_span_mask(
@@ -82,10 +157,16 @@ def make_collate_fn(
     mean_span_length: float = 3.0,
     contrastive_corruption_prob_base: float = 0.3,
     contrastive_corruption_prob_max: float = 0.9,
+    stratified_sampling_prob: float = 0.5,
+    stratify_width: float = 0.1,
 ) -> Callable[[List[DatasetOutput]], CollateOutput]:
     """
     Resulting collate function encodes input into one-hot vectors assuming classes equal to vocab_size,
-    and then adds noise according to the scheduler before transforming the noisy vectors using theta function
+    and then adds noise according to the scheduler before transforming the noisy vectors using theta function.
+
+    For the stratification sampling process, if it is triggered, we pick a random `left` stratification boundary
+    in [0, 1) and then set `right = left + stratify_width`, which will be clamped by the straitifcation sampling
+    function to ensure both `left` and `right` are in [0, 1] and `left <= right`.
 
     Args:
         - scheduler (Scheduler): Scheduler used to determine the amount of noise to add.
@@ -96,6 +177,8 @@ def make_collate_fn(
         - contrastive_corruption_prob_base (float): Base probability for corruption in contrastive input.
             The probability increases with time linearly up to contrastive_corruption_prob_max.
         - contrastive_corruption_prob_max (float): Maximum probability for corruption in contrastive input
+        - stratified_sampling_prob (float): Probability of using stratified sampling for normal and contrastive inputs.
+        - stratify_width (float): Width of the stratified sampling window.
     Returns:
         Collate function that can be used in a DataLoader.
     """
@@ -169,9 +252,39 @@ def make_collate_fn(
         beta = scheduler_output["beta"]  # (1, total_len)
 
         y_dist = y(packed_x, beta)
-        model_input = theta(y_dist)
 
         contrastive_y_dist = y(contrastive_x, beta)
+
+        use_stratified = random.random() < stratified_sampling_prob
+        # if we are using stratified sampling, we resample `model_input` and `contrastive_input`
+        # and then pass it through the y and theta processes again
+        if use_stratified:
+            stratification_level_left = random.random()  # in [0, 1)
+            right = stratification_level_left + stratify_width
+            # Resample model_input
+            sampled_packed_x = stratified_window(
+                logits=y_dist,
+                num_samples=1,
+                left=stratification_level_left,
+                right=right,
+                is_probs=False,
+            )  # (1, total_len)
+            sampled_packed_x = F.one_hot(sampled_packed_x, num_classes=vocab_size)
+            y_dist = y(sampled_packed_x, beta)
+
+            # sampled_constrastive_x = stratified_window(
+            #     logits=contrastive_y_dist,
+            #     num_samples=1,
+            #     left=stratification_level_left,
+            #     right=right,
+            #     is_probs=False,
+            # )  # (1, total_len)
+            # sampled_constrastive_x = F.one_hot(
+            #     sampled_constrastive_x, num_classes=vocab_size
+            # )
+            # contrastive_y_dist = y(sampled_constrastive_x, beta)
+
+        model_input = theta(y_dist)
         contrastive_input = theta(contrastive_y_dist)
 
         # for each batch, for each sequence position, use `model_input` if mask is True else use `x`

@@ -25,6 +25,7 @@ dependencies = [
     "triton==2.2.0",
     "causal-conv1d>=1.5.3.post1",
     "mamba-ssm[causal-conv1d]>=2.2.6.post3",
+    "nltk>=3.9.2",
 ]
 
 [tool.pyright]

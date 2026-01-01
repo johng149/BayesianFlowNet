@@ -11,3 +11,7 @@
 - Isotropic activation functions: Basically, the idea is what if activation functions act on the entire vector by using its magnitude rather than elementwise. It supposedly helps by avoiding the inductive bias of elementwise activations. Does not converge, absolute dog.
 - Elephant activation functions: Supposedly the sparser gradients helps with continual learning and avoiding catastrophic forgetting. Convergence is slightly worse, and training speed is slightly worse. Perhaps if the dataset was huge it would make a difference, but so far my model is large enough to overfit the dataset so I don't see any benefit here.
 - Sequence packing: About 17% faster training speed, converge is the same since mathematically it is equivalent.
+
+Naively trying to implement inference time scaling with using the energy based model as a verifier did not work out well. Peformance is about the same but compute cost is higher. The way I tried to do it was to have one model forward pass to go from `x_0` to `x_1`, where `x_1` is the updated logits.
+
+Then, using those `x_1` logits, sample `k` candidates from the distribution defined by `x_1` to produce indices for the sequences, then apply the normal noise adding step as if  those `k` sequences were the ground truth, then using the energy based model to score those `k` noisy logit sequences, and finally take the top scoring sequence as the new `x_1`. Seems with this method there is a train-test mismatch.

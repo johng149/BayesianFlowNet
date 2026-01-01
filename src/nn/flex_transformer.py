@@ -13,8 +13,11 @@ def causal(b, h, q_idx, kv_idx):
 def generate_doc_mask_mod(mask_mod, document_id):
     # can feed in another mask modifier function such as `causal` or None
     assert document_id.ndim == 1 or (
-        document_id.ndim == 2 and document_id.shape[0] == 1
+        document_id.ndim == 2
+        and (document_id.shape[0] == 1 or ((document_id == document_id[0]).all()))
     )
+    if document_id.ndim == 2 and document_id.shape[0] > 1:
+        document_id = document_id[0]
     doc_id = document_id.view(-1)
 
     # Get unique document IDs and their counts
