@@ -464,6 +464,20 @@ def sample(
     return xt
 
 
+def ode_euler(
+    model: Module,
+    t: Tensor,
+    x: Tensor,
+    mask: Tensor,
+    doc_ids: Tensor,
+    model_prompt: Tensor,
+) -> Tensor:
+    x = F.softmax(x, -1)
+    x = torch.where(mask.unsqueeze(-1), x, model_prompt)
+    logits, _ = model(x, t, mask, doc_ids)
+    return logits
+
+
 def inference(
     model: Module,
     scheduler: Scheduler,
@@ -478,20 +492,11 @@ def inference(
     dtype: torch.dtype = torch.float32,
     tk: TokenizerBase | None = None,
 ):
-    solver = TextBFNSolver(
-        model, class_num=K, num_steps=num_steps, max_sqrt_beta=(20.4054 / K) ** 0.5
-    )
-    xt = sample(
-        solver,
-        batch_size,
-        seq_len,
-        K,
-        mask,
-        masked_input,
-        doc_ids,
-        device,
-        steps=num_steps,
-        algorithm="sde_euler",
-        tk=tk,
-    )
-    return xt
+    with torch.no_grad():
+        xt = generative_prior(batch_size, seq_len, K, device, dtype)
+        total_iterations = torch.ones(batch_size, seq_len, device=device) * num_steps
+        for step in range(1, num_steps + 1):
+            current_iteration = torch.ones_like(total_iterations) * step
+            curr_t = dis_t(current_iteration, total_iterations)
+            xt = ode_euler(model, curr_t, xt, mask, doc_ids, masked_input)
+        return xt

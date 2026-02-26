@@ -66,14 +66,14 @@ def dis_t(i: Tensor, n: Tensor, min_t: float = 1e-6) -> Tensor:
     and total steps `n`.
 
     Args:
-        - i (Tensor) Current inference step of shape (batch_size,)
-        - n (Tensor) Total number of inference steps of shape (batch_size,)
+        - i (Tensor) Current inference step of shape (batch_size, seq_len)
+        - n (Tensor) Total number of inference steps of shape (batch_size, seq_len)
         - min_t (float) Minimum timestep value to avoid numerical issues.
     Returns:
-        Tensor: Current timestep `t` of shape (batch_size,).
+        Tensor: Current timestep `t` of shape (batch_size, seq_len).
     """
     assert i.shape == n.shape, "Shapes of i and n must match."
-    assert i.ndim == 1, "Input tensors must be 1D."
+    assert i.ndim == 2, "Input tensors must be 2D."
     assert torch.all(i > 0) and torch.all(
         n > 0
     ), "Input tensors must contain positive values."
